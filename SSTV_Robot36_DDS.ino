@@ -14,7 +14,8 @@ constexpr uint8_t PIN_CS   = 21;
 constexpr uint8_t PIN_GDO0 = 4;
 constexpr uint8_t PIN_GDO2 = 27;
 
-constexpr float CARRIER_FREQ_MHZ = 433.920f;
+constexpr double CARRIER_FREQ_MHZ = 433.920; // Частота канала на рации, МГц.
+constexpr double TX_FREQ_OFFSET_KHZ = 0.0;   // Поправка CC1101 в кГц. Знак + повышает частоту, знак − понижает.
 constexpr int8_t TX_POWER_DBM = 0; // Вблизи SDR; первоначально было +10 dBm.
 
 constexpr uint16_t IMAGE_WIDTH  = 320;
@@ -150,9 +151,15 @@ void setup() {
   Serial.println("=== SSTV ROBOT 36 / DDS / ESP32 + CC1101 ===");
 
   SPI.begin(PIN_SCK, PIN_MISO, PIN_MOSI, PIN_CS);
+  // RadioLib 8 принимает герцы. Округляем после прибавления знаковой поправки.
+  constexpr double txFrequencyHz = CARRIER_FREQ_MHZ * 1e6 + TX_FREQ_OFFSET_KHZ * 1e3;
+  static_assert(txFrequencyHz >= 1.0 && txFrequencyHz <= UINT32_MAX,
+                "Частота CC1101 с поправкой должна помещаться в uint32_t (Гц)");
   ConfigFSK_t config;
-  config.frequency = RADIOLIB_UNIT_MEGA(CARRIER_FREQ_MHZ);
+  config.frequency = static_cast<uint32_t>(txFrequencyHz + 0.5);
   config.power = TX_POWER_DBM;
+  Serial.printf("Канал: %.6f МГц, поправка TX: %+.3f кГц, задано CC1101: %.6f МГц\n",
+                CARRIER_FREQ_MHZ, TX_FREQ_OFFSET_KHZ, config.frequency / 1e6);
 
   int16_t state = radio.begin(config);
   Serial.printf("radio.begin = %d\n", state);
@@ -180,7 +187,7 @@ void setup() {
   timerAttachInterrupt(audioTimer, &audioISR);
   timerAlarm(audioTimer, 1, true, 0);
   timerStop(audioTimer);
-  Serial.println("Готов: 433.920 МГц, Robot 36, 320x240, GPIO4 DDS.");
+  Serial.println("Готов: Robot 36, 320x240, GPIO4 DDS.");
 }
 
 void loop() {
