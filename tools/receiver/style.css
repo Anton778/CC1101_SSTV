@@ -1,0 +1,34 @@
+:root { color-scheme: light; font: 16px/1.5 "Segoe UI", system-ui, sans-serif; color: #1a3042; background: #f2f5f6; }
+* { box-sizing: border-box; }
+body { margin: 0; }
+main { max-width: 66rem; margin: 0 auto; padding: 2.8rem 1.4rem; }
+h1, h2, p, figure { margin: 0; }
+h1 { font-size: clamp(1.85rem, 5vw, 3rem); line-height: 1.1; }
+h1 span { color: #126761; }
+h2 { font-size: 1.28rem; margin-bottom: .7rem; }
+.intro { max-width: 44rem; margin: .8rem 0 1.7rem; }
+.panels, .fields { display: grid; gap: 1rem; }
+.panels { grid-template-columns: 1fr 1.2fr; align-items: start; }
+section { padding: 1.4rem; background: #fff; border: 1px solid #cbd7da; border-radius: .65rem; }
+section p { margin: .4rem 0 .9rem; }
+.experiment { margin-top: 1rem; }
+.fields { grid-template-columns: repeat(4, minmax(0, 1fr)); margin: .8rem 0 1rem; }
+label { display: block; font-weight: 600; font-size: .92rem; }
+input, button { font: inherit; }
+input { display: block; max-width: 100%; border: 1px solid #a3b6ba; border-radius: .3rem; padding: .42rem .55rem; margin: .25rem 0; }
+input[type=number] { width: 7rem; }
+input[type=file] { width: 100%; }
+.actions { display: flex; flex-wrap: wrap; gap: .5rem; margin: .8rem 0 0; }
+button { padding: .48rem .82rem; border-radius: .35rem; background: #12635f; color: white; border: 1px solid #12635f; cursor: pointer; }
+button.secondary { background: #fff; color: #174c4a; }
+button:disabled { background: #e5ebed; border-color: #d3dee0; color: #53636b; cursor: default; }
+a { color: #075d6b; font-weight: 600; }
+progress { width: 100%; margin-top: .7rem; accent-color: #12635f; }
+.status, figcaption, .file-info { color: #445866; font-size: .92rem; }
+.status:not(:empty) { margin: .8rem 0 .35rem; }
+.status:empty { margin: 0; }
+.status.error { color: #942e20; }
+canvas { display: block; margin-top: .75rem; width: 320px; max-width: 100%; height: auto; }
+figcaption { margin: .4rem 0; }
+[hidden] { display: none !important; }
+@media (max-width: 720px) { .panels { grid-template-columns: 1fr; } .fields { grid-template-columns: repeat(2, 1fr); } main { padding-top: 1.6rem; } }

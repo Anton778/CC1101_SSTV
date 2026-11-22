@@ -1,4 +1,5 @@
 #include "SstvRadio.h"
+#include "RxCapture.h"
 #include <Arduino.h>
 #include <SPI.h>
 #include <RadioLib.h>
@@ -148,6 +149,17 @@ void haltStation() {
   while (true) { delay(1000); }
 }
 
+double frequencyCorrectionKHz = 0;
+
+uint32_t correctedHz(double nominalHz) {
+  const double hz = nominalHz + frequencyCorrectionKHz * 1e3;
+  if (!(hz >= 1.0 && hz <= UINT32_MAX)) {
+    Serial.println("Ошибка частоты канала или поправки.");
+    haltStation();
+  }
+  return static_cast<uint32_t>(hz + 0.5);
+}
+
 void checkRadio(const char* operation, int16_t state) {
   Serial.printf("%s = %d\n", operation, state);
   if (state != RADIOLIB_ERR_NONE) {
@@ -157,31 +169,29 @@ void checkRadio(const char* operation, int16_t state) {
 
 }  // namespace
 
-void setup() {
+void beginStation(SstvMode mode, double channelMHz, double correctionKHz, int8_t powerDbm) {
   Serial.begin(115200);
   delay(1500);
   Serial.println("=== SSTV ROBOT 36 / DDS / ESP32 + CC1101 ===");
 
   SPI.begin(PIN_SCK, PIN_MISO, PIN_MOSI, PIN_CS);
-  // RadioLib 8 принимает герцы. Округляем после прибавления знаковой поправки.
-  const double frequencyHz = CARRIER_FREQ_MHZ * 1e6 + FREQ_OFFSET_KHZ * 1e3;
-  if (!(frequencyHz >= 1.0 && frequencyHz <= UINT32_MAX)) {
-    Serial.println("Ошибка частоты. Проверьте CARRIER_FREQ_MHZ и FREQ_OFFSET_KHZ.");
-    haltStation();
-  }
+  frequencyCorrectionKHz = correctionKHz;
   ConfigFSK_t config;
-  config.frequency = static_cast<uint32_t>(frequencyHz + 0.5);
-  config.power = (RADIO_MODE == SSTV_TX) ? TX_POWER_DBM : 0;
+  config.frequency = correctedHz(channelMHz * 1e6);
+  config.power = (mode == SSTV_TX) ? powerDbm : 0;
+  if (mode == SSTV_SCAN) config.receiverBandwidth = 58000;
+  const char* modeName = mode == SSTV_TX ? "TX" : (mode == SSTV_RX ? "RX" : "SCAN");
   Serial.printf("Режим %s, канал: %.6f МГц, поправка: %+.3f кГц, задано CC1101: %.6f МГц\n",
-                RADIO_MODE == SSTV_TX ? "TX" : "RX", CARRIER_FREQ_MHZ,
-                FREQ_OFFSET_KHZ, config.frequency / 1e6);
+                modeName, channelMHz, correctionKHz, config.frequency / 1e6);
   checkRadio("radio.begin", radio.begin(config));
-  checkRadio("setFrequencyDeviation", radio.setFrequencyDeviation(2000)); // Гц, как в исходном передатчике.
+  checkRadio("setFrequencyDeviation", radio.setFrequencyDeviation(2000));
 
-  if (RADIO_MODE == SSTV_RX) {
-    pinMode(PIN_GDO0, INPUT);  // В приёме эту линию ведёт CC1101.
+  if (mode != SSTV_TX) {
+    pinMode(PIN_GDO0, INPUT);
     checkRadio("receiveDirectAsync", radio.receiveDirectAsync());
-    Serial.println("Приём: уровень сигнала в мониторе порта, демодулированный сигнал на GDO0.");
+    if (mode == SSTV_RX) {
+      Serial.println("Приём готов. Для записи через USB откройте конвертер на компьютере.");
+    }
     return;
   }
 
@@ -202,13 +212,30 @@ void setup() {
   Serial.println("Готов: Robot 36, 320x240, GPIO4 DDS.");
 }
 
-void loop() {
-  if (RADIO_MODE == SSTV_RX) {
-    delay(250);
-    Serial.printf("RSSI: %.1f дБм\n", radio.getRSSI());
-    return;
+float measureReceiveRssi(int frequencyKHz) {
+  // setFrequency переводит CC1101 в IDLE. Возвращаем модуль в RX на каждой точке.
+  int16_t state = radio.setFrequency(correctedHz(frequencyKHz * 1000.0));
+  if (state == RADIOLIB_ERR_NONE) state = radio.receiveDirectAsync();
+  if (state != RADIOLIB_ERR_NONE) checkRadio("scan RX", state);
+  delay(12);  // Дать синтезатору и измерителю RSSI установиться.
+  float sum = 0;
+  for (int i = 0; i < 4; ++i) {
+    sum += radio.getRSSI();
+    delay(2);
   }
+  return sum / 4;
+}
 
+void listenForPicture() {
+  static uint32_t previousReport = 0;
+  if (!serviceRxCapture(PIN_GDO0) && millis() - previousReport >= 250) {
+    Serial.printf("RSSI: %.1f дБм\n", radio.getRSSI());
+    previousReport = millis();
+  }
+  delay(1);
+}
+
+void transmitPicture(uint16_t pauseSeconds) {
   Serial.println("TX START: VIS + 240 строк, ожидается ~36.91 с");
   int16_t state = radio.transmitDirectAsync();
   Serial.printf("transmitDirectAsync = %d\n", state);
@@ -241,6 +268,6 @@ void loop() {
                 (unsigned long)actualMs, state);
   Serial.printf("Опозданий >50 мкс: %lu, максимум = %lu мкс\n",
                 (unsigned long)lateTones, (unsigned long)worstLateUs);
-  Serial.printf("Пауза %u с. Затем повтор кадра.\n", static_cast<unsigned>(FRAME_PAUSE_S));
-  delay(static_cast<uint32_t>(FRAME_PAUSE_S) * 1000);
+  Serial.printf("Пауза %u с. Затем повтор кадра.\n", static_cast<unsigned>(pauseSeconds));
+  delay(static_cast<uint32_t>(pauseSeconds) * 1000);
 }

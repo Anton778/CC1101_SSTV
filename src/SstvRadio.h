@@ -1,12 +1,10 @@
 #pragma once
 
-#include <stdint.h>
+#include <Arduino.h>
 
-enum SstvMode { SSTV_TX, SSTV_RX };
+enum SstvMode { SSTV_TX, SSTV_RX, SSTV_SCAN };
 
-// Эти настройки задаются в основном скетче. Arduino вызывает setup() и loop() из SstvRadio.cpp.
-extern const SstvMode RADIO_MODE;
-extern const double CARRIER_FREQ_MHZ;
-extern const int8_t TX_POWER_DBM;
-extern const double FREQ_OFFSET_KHZ;
-extern const uint16_t FRAME_PAUSE_S;
+void beginStation(SstvMode mode, double channelMHz, double correctionKHz, int8_t powerDbm);
+void transmitPicture(uint16_t pauseSeconds);
+void listenForPicture();
+float measureReceiveRssi(int frequencyKHz);

@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Robot 36 · Приём и декодирование SSTV</title>
+  <link rel="stylesheet" href="style.css">
+  <script defer src="wav.js"></script>
+  <script defer src="robot36.js"></script>
+  <script defer src="serial.js"></script>
+  <script defer src="sweep.js"></script>
+  <script defer src="reference.js"></script>
+  <script defer src="app.js"></script>
+</head>
+<body>
+  <main>
+    <h1>Приём SSTV <span>Robot 36</span></h1>
+    <p class="intro">Запишите кадр с приёмной ESP32 в WAV. Затем откройте файл и восстановите изображение размером 320 × 240 пикселей.</p>
+    <div class="panels">
+      <section>
+        <h2>Запись с платы</h2>
+        <p>Загрузите режим <code>SSTV_RX</code>, подключите плату по USB и закройте монитор порта Arduino IDE.</p>
+        <label for="seconds">Длительность, с</label>
+        <input id="seconds" type="number" value="90" min="40" max="120" step="1" required>
+        <div class="actions">
+          <button id="record">Выбрать порт и записать</button>
+          <button id="cancel" class="secondary" hidden>Остановить</button>
+        </div>
+        <progress id="record-progress" max="90" value="0" hidden></progress>
+        <p class="status" role="status" id="record-status"></p>
+        <a id="save-recording" hidden download="robot36-rx.wav">Сохранить принятый WAV</a>
+      </section>
+      <section>
+        <h2>Изображение из WAV</h2>
+        <label for="wav-file">Звуковая запись</label>
+        <input id="wav-file" type="file" accept=".wav,audio/wav,audio/x-wav">
+        <p class="file-info" id="file-info">Для проверки без платы можно скачать контрольный WAV с цветными полосами.</p>
+        <div class="actions">
+          <button id="decode" disabled>Декодировать кадр</button>
+          <button id="example" class="secondary">Скачать контрольный WAV</button>
+        </div>
+        <p class="status" role="status" id="decode-status"></p>
+        <figure id="result" hidden>
+          <canvas id="picture" width="320" height="240" aria-label="Принятое изображение Robot 36"></canvas>
+          <figcaption id="caption"></figcaption>
+        </figure>
+        <a id="save-picture" hidden>Сохранить PNG</a>
+      </section>
+    </div>
+    <section class="experiment">
+      <h2>Опыт со свипом</h2>
+      <p>К выбранному WAV прибавляется тон. За один период его частота проходит от нижней границы до верхней и обратно. Откройте полученную копию и сравните изображения.</p>
+      <div class="fields">
+        <label>Нижняя частота, Гц<input id="low" type="number" min="20" step="1" value="1100" required></label>
+        <label>Верхняя частота, Гц<input id="high" type="number" min="21" step="1" value="2300" required></label>
+        <label>Период, с<input id="period" type="number" min="0.05" max="60" step="any" value="2" required></label>
+        <label>Амплитуда, % от пика WAV<input id="level" type="number" min="0" max="200" step="any" value="60" required></label>
+      </div>
+      <button id="sweep" disabled>Сохранить WAV со свипом</button>
+      <p class="status" role="status" id="sweep-status"></p>
+    </section>
+  </main>
+</body>
+</html>
