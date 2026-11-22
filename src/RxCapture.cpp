@@ -41,12 +41,16 @@ void IRAM_ATTR samplePin() {
   }
 }
 
-void stopRecording() {
+}  // namespace
+
+bool rxRecording() { return recording; }
+
+void stopRxRecording() {
   if (recording) timerStop(sampleTimer);
   recording = false;
 }
 
-void startRecording(unsigned seconds, uint8_t dataPin) {
+void startRxRecording(unsigned seconds, uint8_t dataPin) {
   if (!blocks) blocks = xQueueCreate(QUEUE_DEPTH, sizeof(Block));
   if (!sampleTimer) {
     sampleTimer = timerBegin(TIMER_HZ);
@@ -75,45 +79,10 @@ void startRecording(unsigned seconds, uint8_t dataPin) {
   timerStart(sampleTimer);
 }
 
-void handleCommand(const char* command, uint8_t dataPin) {
-  if (strcmp(command, "PING") == 0) {
-    Serial.println(recording ? "SSTV BUSY" : "SSTV READY 1");
-  } else if (strcmp(command, "STOP") == 0) {
-    stopRecording();
-    Serial.println("SSTV STOP");
-  } else if (strncmp(command, "REC ", 4) == 0) {
-    char* end = nullptr;
-    long seconds = strtol(command + 4, &end, 10);
-    if (recording) Serial.println("SSTV BUSY");
-    else if (*end || seconds < 40 || seconds > 120) Serial.println("SSTV ERROR DURATION");
-    else startRecording(static_cast<unsigned>(seconds), dataPin);
-  }
-}
-
-void readCommands(uint8_t dataPin) {
-  static char line[24];
-  static size_t used = 0;
-  while (Serial.available()) {
-    char c = static_cast<char>(Serial.read());
-    if (c == '\n') {
-      if (used < sizeof(line)) {
-        line[used] = '\0';
-        handleCommand(line, dataPin);
-      }
-      used = 0;
-    } else if (c != '\r' && used < sizeof(line)) {
-      line[used++] = c;
-    }
-  }
-}
-
-}  // namespace
-
-bool serviceRxCapture(uint8_t dataPin) {
-  readCommands(dataPin);
+bool serviceRxCapture() {
   if (!recording) return false;
   if (overrun) {
-    stopRecording();
+    stopRxRecording();
     Serial.println("SSTV ERROR OVERRUN");
     return false;
   }
@@ -130,7 +99,7 @@ bool serviceRxCapture(uint8_t dataPin) {
   line[pos++] = '\n';
   Serial.write(reinterpret_cast<const uint8_t*>(line), pos);
   if (++sent == blockCount) {
-    stopRecording();
+    stopRxRecording();
     Serial.printf("SSTV END %u %08lx\n", sent, static_cast<unsigned long>(checksum));
   }
   return recording;

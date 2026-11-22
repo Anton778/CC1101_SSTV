@@ -19,7 +19,9 @@
     <div class="panels">
       <section>
         <h2>Запись с платы</h2>
-        <p>Загрузите режим <code>SSTV_RX</code>, подключите плату по USB и закройте монитор порта Arduino IDE.</p>
+        <p>Подключите приёмную ESP32 по USB и закройте монитор порта Arduino IDE. При записи конвертер переведёт выбранную плату в RX.</p>
+        <label for="rx-channel">Канал приёма, МГц</label>
+        <input id="rx-channel" type="number" min="300" max="928" step="any" placeholder="Текущий">
         <label for="seconds">Длительность, с</label>
         <input id="seconds" type="number" value="90" min="40" max="120" step="1" required>
         <div class="actions">
@@ -57,6 +59,14 @@
         <label>Амплитуда, % от пика WAV<input id="level" type="number" min="0" max="200" step="any" value="60" required></label>
       </div>
       <button id="sweep" disabled>Сохранить WAV со свипом</button>
+      <details>
+        <summary>Ввести параметры свипа командой</summary>
+        <form id="wav-command-form">
+          <label for="wav-command">Звуковые частоты в Гц, относительная мощность в дБ и период в с</label>
+          <input id="wav-command" type="text" value="WAV_SWEEP 1100 2300 -6 2" required spellcheck="false">
+          <button id="run-wav-command" type="submit" disabled>Применить к выбранному WAV</button>
+        </form>
+      </details>
       <p class="status" role="status" id="sweep-status"></p>
     </section>
   </main>

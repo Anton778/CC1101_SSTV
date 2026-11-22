@@ -8,8 +8,8 @@ const vm = require("node:vm");
 const directory = path.join(__dirname, "..", "tools", "receiver");
 const scripts = ["wav.js", "robot36.js", "reference.js", "sweep.js"];
 const code = scripts.map(name => fs.readFileSync(path.join(directory, name), "utf8")).join("\n");
-const {Wav, Robot36, referenceRobot36, addAudioSweep} = vm.runInNewContext(
-  code + "\n;({Wav, Robot36, referenceRobot36, addAudioSweep})", {setTimeout}
+const {Wav, Robot36, referenceRobot36, addAudioSweep, sweepFromCommand} = vm.runInNewContext(
+  code + "\n;({Wav, Robot36, referenceRobot36, addAudioSweep, sweepFromCommand})", {setTimeout}
 );
 
 test("WAV → VIS 8 → 240 строк, порядок цветов в обеих половинах", async () => {
@@ -61,4 +61,18 @@ test("частота звукового свипа поднимается и о�
   assert.ok(original.samples.every(v => v === 0.5));
   const clean = referenceRobot36();
   assert.deepEqual(addAudioSweep(clean, 1100, 2300, 2, 0).samples, clean.samples);
+});
+
+test("команда свипа задаёт отношение мощностей в дБ и сохраняет исходные отсчёты", () => {
+  const audio = {rate: 16000, samples: new Float32Array(32000).fill(0.2)};
+  const mix = sweepFromCommand(audio, "wav_sweep 1100 2300 -6");
+  let tonePower = 0, signalPower = 0;
+  for (let i = 0; i < audio.samples.length; ++i) {
+    tonePower += (mix.samples[i] - audio.samples[i]) ** 2;
+    signalPower += audio.samples[i] ** 2;
+  }
+  assert.ok(Math.abs(10 * Math.log10(tonePower / signalPower) + 6) < 0.02);
+  assert.ok(audio.samples.every(v => v === Math.fround(0.2)));
+  assert.throws(() => sweepFromCommand(audio, "WAV_SWEEP 1100 2300"), /Формат/);
+  assert.throws(() => sweepFromCommand(audio, "WAV_SWEEP 2300 1100 -6"), /частоты/);
 });

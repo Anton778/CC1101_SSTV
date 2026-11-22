@@ -1,5 +1,5 @@
 // Строковый протокол USB. Проверяем номера блоков, их длину и контрольную сумму.
-async function captureFromPort(port, seconds, signal, onProgress) {
+async function captureFromPort(port, seconds, signal, onProgress, rxMHz = null) {
   await port.open({baudRate: 115200, bufferSize: 32768, flowControl: "none"});
   const reader = port.readable.getReader(), writer = port.writable.getWriter();
   const decoder = new TextDecoder(), encoder = new TextEncoder();
@@ -7,6 +7,11 @@ async function captureFromPort(port, seconds, signal, onProgress) {
   let phase = "ready", deadline = Date.now() + 12000, nextPing = Date.now() + 700;
   let failure, pending = "", bytes, blocks = 0, blockSize = 0, received = 0;
   let rate = 0, hash = 2166136261;
+  function requestRecording() {
+    phase = "begin";
+    deadline = Date.now() + 6000;
+    return send("REC " + seconds);
+  }
   function interrupt(error) {
     if (!failure) {
       failure = error;
@@ -18,8 +23,9 @@ async function captureFromPort(port, seconds, signal, onProgress) {
   const watchdog = setInterval(() => {
     if (Date.now() > deadline) {
       interrupt(Error(phase === "ready"
-        ? "Плата не ответила. Проверьте USB-порт, режим SSTV_RX и закройте монитор Arduino IDE."
-        : "Поток с платы прервался. Повторите запись."));
+        ? "Плата не ответила. Проверьте USB-порт и закройте монитор Arduino IDE."
+        : (phase === "tune" ? "Прошивка не подтвердила переход в RX. Загрузите версию с командами порта."
+                            : "Поток с платы прервался. Повторите запись.")));
     } else if (phase === "ready" && Date.now() >= nextPing) {
       nextPing = Date.now() + 700;
       send("PING").catch(interrupt);
@@ -45,10 +51,20 @@ async function captureFromPort(port, seconds, signal, onProgress) {
         }
         if (phase === "ready") {
           if (line === "SSTV BUSY") await send("STOP");
-          if (line !== "SSTV READY 1") continue;
-          phase = "begin";
-          deadline = Date.now() + 6000;
-          await send("REC " + seconds);
+          if (/^SSTV MODE (TX|SCAN)$/.test(line) || (line === "SSTV READY 1" && rxMHz !== null)) {
+            phase = "tune";
+            deadline = Date.now() + 6000;
+            await send(rxMHz === null ? "RX" : "RX " + rxMHz);
+          } else if (line === "SSTV READY 1") {
+            await requestRecording();
+          }
+        } else if (phase === "tune") {
+          const ack = /^SSTV RX (\d+(?:\.\d+)?)$/.exec(line);
+          if (!ack) continue;
+          if (rxMHz !== null && Math.abs(Number(ack[1]) - rxMHz) > 0.000001) {
+            throw Error("Плата подтвердила другую частоту приёма.");
+          }
+          await requestRecording();
         } else if (phase === "begin") {
           if (!line.startsWith("SSTV BEGIN ")) continue;
           const match = /^SSTV BEGIN (\d+) (\d+) (\d+)$/.exec(line);

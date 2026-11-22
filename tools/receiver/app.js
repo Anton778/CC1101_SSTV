@@ -32,7 +32,7 @@ function downloadWav(audio, filename) {
 function fileControls() {
   byId("wav-file").disabled = processing;
   byId("decode").disabled = processing || !selectedAudio;
-  byId("sweep").disabled = processing || !selectedAudio;
+  byId("sweep").disabled = byId("run-wav-command").disabled = processing || !selectedAudio;
 }
 
 if (!navigator.serial) {
@@ -41,9 +41,10 @@ if (!navigator.serial) {
 }
 byId("record").onclick = async () => {
   const seconds = byId("seconds").valueAsNumber;
-  if (!byId("seconds").reportValidity()) return;
+  if (!byId("seconds").reportValidity() || !byId("rx-channel").reportValidity()) return;
+  const rxMHz = byId("rx-channel").value === "" ? null : byId("rx-channel").valueAsNumber;
   captureController = new AbortController();
-  byId("seconds").disabled = byId("record").disabled = true;
+  byId("rx-channel").disabled = byId("seconds").disabled = byId("record").disabled = true;
   byId("cancel").hidden = false;
   const progress = byId("record-progress");
   progress.max = seconds;
@@ -51,12 +52,12 @@ byId("record").onclick = async () => {
   status("record-status", "Выберите USB-порт приёмной ESP32.");
   try {
     const port = await navigator.serial.requestPort();
-    status("record-status", "Ожидание ответа прошивки SSTV_RX…");
+    status("record-status", "Подключение к приёмной ESP32…");
     const audio = await captureFromPort(port, seconds, captureController.signal, elapsed => {
       progress.hidden = false;
       progress.value = elapsed;
       status("record-status", "Идёт запись: " + elapsed + " из " + seconds + " с.");
-    });
+    }, rxMHz);
     const stamp = new Date().toISOString().slice(0, 19).replace(/[T:]/g, "-");
     setLink("save-recording", new Blob([Wav.write(audio)], {type: wavType}), "robot36-rx-" + stamp + ".wav");
     status("record-status", "Принято " + seconds + " с. Сохраните WAV и выберите его в разделе декодирования.");
@@ -67,7 +68,7 @@ byId("record").onclick = async () => {
     status("record-status", message, true);
   } finally {
     captureController = null;
-    byId("seconds").disabled = byId("record").disabled = false;
+    byId("rx-channel").disabled = byId("seconds").disabled = byId("record").disabled = false;
     byId("cancel").hidden = progress.hidden = true;
   }
 };
@@ -123,14 +124,23 @@ byId("decode").onclick = async () => {
 };
 
 byId("example").onclick = () => downloadWav(referenceRobot36(), "robot36-bars.wav");
-byId("sweep").onclick = () => {
-  const fields = ["low", "high", "period", "level"].map(byId);
-  if (!fields.every(field => field.reportValidity())) return;
+function saveSweep(createAudio) {
+  if (!selectedAudio) return;
   try {
-    const audio = addAudioSweep(selectedAudio, ...fields.map(field => field.valueAsNumber));
+    const audio = createAudio();
     downloadWav(audio, baseName + "-sweep.wav");
     status("sweep-status", "Копия подготовлена. Выберите WAV со свипом в разделе декодирования.");
   } catch (e) {
     status("sweep-status", e.message, true);
   }
+}
+byId("sweep").onclick = () => {
+  const fields = ["low", "high", "period", "level"].map(byId);
+  if (fields.every(field => field.reportValidity())) {
+    saveSweep(() => addAudioSweep(selectedAudio, ...fields.map(field => field.valueAsNumber)));
+  }
+};
+byId("wav-command-form").onsubmit = event => {
+  event.preventDefault();
+  saveSweep(() => sweepFromCommand(selectedAudio, byId("wav-command").value));
 };

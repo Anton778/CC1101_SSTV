@@ -1,5 +1,7 @@
 #pragma once
 #include <stdint.h>
 
-// Обмен с USB-конвертером. Возвращает true во время записи.
-bool serviceRxCapture(uint8_t dataPin);
+bool rxRecording();
+void startRxRecording(unsigned seconds, uint8_t dataPin);
+void stopRxRecording();
+bool serviceRxCapture();

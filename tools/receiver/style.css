@@ -32,3 +32,7 @@ canvas { display: block; margin-top: .75rem; width: 320px; max-width: 100%; heig
 figcaption { margin: .4rem 0; }
 [hidden] { display: none !important; }
 @media (max-width: 720px) { .panels { grid-template-columns: 1fr; } .fields { grid-template-columns: repeat(2, 1fr); } main { padding-top: 1.6rem; } }
+details { margin-top: .9rem; }
+summary { cursor: pointer; color: #174c4a; }
+#wav-command-form { margin-top: .55rem; }
+#wav-command { width: 23rem; margin-bottom: .55rem; font-family: ui-monospace, monospace; }
