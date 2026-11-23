@@ -1,4 +1,5 @@
 #include "Robot36Tx.h"
+#include "ImageStore.h"
 #include <Arduino.h>
 #include "soc/gpio_struct.h"
 #include "../image_data.h"
@@ -45,10 +46,12 @@ uint32_t toneDeadlineUs = 0;
 uint32_t lateTones = 0;
 uint32_t worstLateUs = 0;
 
-inline void playTone(uint16_t frequencyHz, uint32_t durationUs) {
+inline void startTone(uint16_t frequencyHz, uint32_t durationUs) {
   // Меняем только приращение фазы; сам аккумулятор не обнуляем.
   phaseStep = frequencyToStep(frequencyHz);
   toneDeadlineUs += durationUs;
+}
+inline void waitTone() {
   while ((int32_t)(micros() - toneDeadlineUs) < 0) {
     // Ждём заданную границу сегмента, не накапливая задержки вычисления.
   }
@@ -59,6 +62,11 @@ inline void playTone(uint16_t frequencyHz, uint32_t durationUs) {
   if (late > 0 && (uint32_t)late > worstLateUs) {
     worstLateUs = late;
   }
+}
+
+inline void playTone(uint16_t hz, uint32_t durationUs) {
+  startTone(hz, durationUs);
+  waitTone();
 }
 
 // VIS = 8, семь бит младшим вперёд, бит чётности и стоповый тон.
@@ -72,27 +80,32 @@ unsigned visIndex = 0;
 uint16_t lineIndex = 0;
 uint32_t frameStartUs = 0, elapsedMs = 0;
 
-// Оставляем RGB565 исходного файла, как в предыдущей версии.
-inline void rgb565At(uint32_t offset, uint8_t& r, uint8_t& g, uint8_t& b) {
-  const uint16_t c = pgm_read_word(&image_map[offset]);
+bool storedFrame = false, readError = false;
+uint16_t rowPixels[SSTV_WIDTH];
+static_assert(SSTV_WIDTH == ImageStore::Width && SSTV_HEIGHT == ImageStore::Height, "Robot 36 geometry");
+
+inline void unpack565(uint16_t c, uint8_t& r, uint8_t& g, uint8_t& b) {
   r = ((c >> 11) & 0x1F) * 255 / 31;
   g = ((c >> 5)  & 0x3F) * 255 / 63;
   b = (c & 0x1F) * 255 / 31;
 }
 
 void sendRobot36Line(uint16_t y) {
-  // Масштабирование по вертикали: 256 -> 240 без правки image_data.h.
-  const uint16_t srcY = ((uint32_t)(2 * y + 1) * IMAGE_HEIGHT) /
-                        (2 * SSTV_HEIGHT);
-  const uint32_t rowOffset = (uint32_t)srcY * IMAGE_WIDTH;
-
-  playTone(1200, 9000);  // Синхроимпульс 9 мс
+  startTone(1200, 9000);  // Читаем строку во время синхроимпульса.
+  const uint16_t* row = rowPixels;
+  if (storedFrame) {
+    if (!ImageStore::readRow(rowPixels)) { readError = true; return; }
+  } else {
+    const uint16_t srcY = (uint32_t(2 * y + 1) * IMAGE_HEIGHT) / (2 * SSTV_HEIGHT);
+    row = &image_map[uint32_t(srcY) * IMAGE_WIDTH];
+  }
+  waitTone();
   playTone(1500, 3000);  // Площадка 3 мс
 
   // Y: 320 * 275 мкс = 88 мс.
   for (uint16_t x = 0; x < SSTV_WIDTH; ++x) {
     uint8_t r, g, b;
-    rgb565At(rowOffset + x, r, g, b);
+    unpack565(pgm_read_word(row + x), r, g, b);
     const uint8_t Y = (uint8_t)(0.299f * r + 0.587f * g + 0.114f * b);
     const uint16_t frequencyY = 1500 + (uint32_t)Y * 800 / 255;
     playTone(frequencyY, 275);
@@ -105,7 +118,7 @@ void sendRobot36Line(uint16_t y) {
   // Цветность: 320 * 137,5 мкс = 44 мс.
   for (uint16_t x = 0; x < SSTV_WIDTH; ++x) {
     uint8_t r, g, b;
-    rgb565At(rowOffset + x, r, g, b);
+    unpack565(pgm_read_word(row + x), r, g, b);
     int16_t chroma = even
       ? (128 + (int16_t)(0.500f * r - 0.419f * g - 0.081f * b))
       : (128 + (int16_t)(-0.169f * r - 0.331f * g + 0.500f * b));
@@ -137,7 +150,10 @@ bool prepare(uint8_t pin) {
   return true;
 }
 
-void start() {
+bool start() {
+  storedFrame = ImageStore::hasImage();
+  readError = !ImageStore::openFrame();
+  if (readError) return false;
   phaseAcc = lateTones = worstLateUs = 0;
   visIndex = lineIndex = 0;
   phaseStep = frequencyToStep(VIS[0].hz);
@@ -145,6 +161,7 @@ void start() {
   timerRestart(audioTimer);
   timerStart(audioTimer);
   frameStartUs = toneDeadlineUs = micros();
+  return true;
 }
 
 bool advance() {
@@ -163,16 +180,18 @@ bool advance() {
     }
   }
   sendRobot36Line(lineIndex++);
-  return lineIndex == SSTV_HEIGHT;
+  return readError || lineIndex == SSTV_HEIGHT;
 }
 
 bool active() { return audioActive; }
+bool readFailed() { return readError; }
 
 void stop() {
   if (!audioActive) return;
   elapsedMs = (micros() - frameStartUs) / 1000;
   audioActive = false;
   timerStop(audioTimer);
+  ImageStore::closeFrame();
 }
 
 void printTiming() {
