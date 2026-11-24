@@ -30,9 +30,12 @@ function downloadWav(audio, filename) {
 }
 
 function fileControls() {
-  byId("wav-file").disabled = processing;
-  byId("decode").disabled = processing || !selectedAudio;
-  byId("sweep").disabled = byId("run-wav-command").disabled = processing || !selectedAudio;
+  const locked = processing || Boolean(captureController);
+  byId("record").disabled = locked || !navigator.serial || Boolean(window.fieldStation && !window.fieldStation.canRecord());
+  if (byId("compare")) byId("compare").disabled = byId("load-bars").disabled = locked;
+  byId("wav-file").disabled = processing || Boolean(captureController);
+  byId("decode").disabled = processing || Boolean(captureController) || !selectedAudio;
+  byId("sweep").disabled = byId("run-wav-command").disabled = processing || Boolean(captureController) || !selectedAudio;
 }
 
 if (!navigator.serial) {
@@ -40,27 +43,36 @@ if (!navigator.serial) {
   status("record-status", "Для записи по USB откройте эту страницу в настольном Chrome или Edge. Открыть готовый WAV можно здесь.");
 }
 byId("record").onclick = async () => {
+  const field = window.fieldStation;
+  if (processing || captureController || (field && !field.session())) return;
   const seconds = byId("seconds").valueAsNumber;
   if (!byId("seconds").reportValidity() || !byId("rx-channel").reportValidity()) return;
   const rxMHz = byId("rx-channel").value === "" ? null : byId("rx-channel").valueAsNumber;
+  if (field && !field.beginCapture()) return;
   captureController = new AbortController();
   byId("rx-channel").disabled = byId("seconds").disabled = byId("record").disabled = true;
   byId("cancel").hidden = false;
   const progress = byId("record-progress");
   progress.max = seconds;
   progress.value = 0;
-  status("record-status", "Выберите USB-порт приёмной ESP32.");
+  fileControls();
+  status("record-status", "Подключение к приёмной ESP32…");
   try {
-    const port = await navigator.serial.requestPort();
-    status("record-status", "Подключение к приёмной ESP32…");
-    const audio = await captureFromPort(port, seconds, captureController.signal, elapsed => {
+    const source = field ? field.session() : await navigator.serial.requestPort();
+    const capture = field ? captureOnSession : captureFromPort;
+    const audio = await capture(source, seconds, captureController.signal, elapsed => {
       progress.hidden = false;
       progress.value = elapsed;
       status("record-status", "Идёт запись: " + elapsed + " из " + seconds + " с.");
     }, rxMHz);
     const stamp = new Date().toISOString().slice(0, 19).replace(/[T:]/g, "-");
     setLink("save-recording", new Blob([Wav.write(audio)], {type: wavType}), "robot36-rx-" + stamp + ".wav");
-    status("record-status", "Принято " + seconds + " с. Сохраните WAV и выберите его в разделе декодирования.");
+    byId("cancel").hidden = true;
+    status("record-status", "Принято " + seconds + " с. Декодирование началось.");
+    selectedAudio = audio;
+    baseName = "robot36-rx-" + stamp;
+    byId("file-info").textContent = "Запись с платы · " + audio.rate + " Гц · " + seconds + " с";
+    await decodeSelected();
   } catch (e) {
     let message = e.message;
     if (e.name === "NotFoundError") message = "Выбор порта отменён.";
@@ -68,8 +80,10 @@ byId("record").onclick = async () => {
     status("record-status", message, true);
   } finally {
     captureController = null;
+    field?.endCapture();
     byId("rx-channel").disabled = byId("seconds").disabled = byId("record").disabled = false;
     byId("cancel").hidden = progress.hidden = true;
+    fileControls();
   }
 };
 byId("cancel").onclick = () => captureController?.abort();
@@ -98,7 +112,7 @@ byId("wav-file").onchange = async event => {
   }
 };
 
-byId("decode").onclick = async () => {
+async function decodeSelected() {
   processing = true;
   fileControls();
   byId("result").hidden = byId("save-picture").hidden = true;
@@ -121,8 +135,9 @@ byId("decode").onclick = async () => {
     processing = false;
     fileControls();
   }
-};
+}
 
+byId("decode").onclick = decodeSelected;
 byId("example").onclick = () => downloadWav(referenceRobot36(), "robot36-bars.wav");
 function saveSweep(createAudio) {
   if (!selectedAudio) return;
@@ -143,4 +158,35 @@ byId("sweep").onclick = () => {
 byId("wav-command-form").onsubmit = event => {
   event.preventDefault();
   saveSweep(() => sweepFromCommand(selectedAudio, byId("wav-command").value));
+};
+
+// В общем пульте контрольная запись и опыт доступны без радиоплаты.
+if (byId("load-bars")) byId("load-bars").onclick = async () => {
+  if (processing || captureController) return;
+  selectedAudio = referenceRobot36();
+  baseName = "robot36-bars";
+  byId("file-info").textContent = "Контрольная запись · цветовые полосы";
+  await decodeSelected();
+};
+if (byId("compare")) byId("compare").onclick = async () => {
+  if (processing || captureController) return;
+  const fields = ["low", "high", "period", "level"].map(byId);
+  if (!fields.every(field => field.reportValidity())) return;
+  processing = true;
+  fileControls();
+  const output = byId("comparison");
+  output.hidden = true;
+  try {
+    const source = selectedAudio || referenceRobot36();
+    status("sweep-status", "Декодирование исходной записи…");
+    const clean = await Robot36.decode(source, () => {});
+    byId("clean-frame").getContext("2d").putImageData(new ImageData(clean.pixels, clean.width, clean.height), 0, 0);
+    output.hidden = false;
+    byId("mixed-frame").getContext("2d").clearRect(0, 0, 320, 240);
+    status("sweep-status", "Декодирование копии со свипом…");
+    const mixed = await Robot36.decode(addAudioSweep(source, ...fields.map(f => f.valueAsNumber)), () => {});
+    byId("mixed-frame").getContext("2d").putImageData(new ImageData(mixed.pixels, mixed.width, mixed.height), 0, 0);
+    status("sweep-status", "Строк с синхронизацией из 240. Исходный кадр — " + clean.locked + ", со свипом — " + mixed.locked + ".");
+  } catch (e) { status("sweep-status", e.message, true); }
+  finally { processing = false; fileControls(); }
 };

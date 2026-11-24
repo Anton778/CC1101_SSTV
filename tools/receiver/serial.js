@@ -2,8 +2,33 @@
 async function captureFromPort(port, seconds, signal, onProgress, rxMHz = null) {
   await port.open({baudRate: 115200, bufferSize: 32768, flowControl: "none"});
   const reader = port.readable.getReader(), writer = port.writable.getWriter();
-  const decoder = new TextDecoder(), encoder = new TextEncoder();
-  const send = s => writer.write(encoder.encode(s + "\n"));
+  const encoder = new TextEncoder();
+  try {
+    return await captureRobot36(reader, line => writer.write(encoder.encode(line + "\n")), seconds, signal, onProgress, rxMHz);
+  } finally {
+    writer.releaseLock();
+    await port.close().catch(() => {});
+  }
+}
+
+// Один владелец USB-порта на весь пульт. Запись подписывается только на ответы SSTV.
+function captureOnSession(session, seconds, signal, onProgress, rxMHz) {
+  let unlisten;
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream({
+    start(controller) {
+      unlisten = session.subscribe(line => {
+        if (line === null) { unlisten(); controller.error(Error("Потеряна связь с платой.")); }
+        else if (line.startsWith("SSTV ")) controller.enqueue(encoder.encode(line + "\n"));
+      });
+    },
+    cancel() { unlisten(); }
+  });
+  return captureRobot36(stream.getReader(), line => session.write(line), seconds, signal, onProgress, rxMHz);
+}
+
+async function captureRobot36(reader, send, seconds, signal, onProgress, rxMHz) {
+  const decoder = new TextDecoder();
   let phase = "ready", deadline = Date.now() + 12000, nextPing = Date.now() + 700;
   let failure, pending = "", bytes, blocks = 0, blockSize = 0, received = 0;
   let rate = 0, hash = 2166136261;
@@ -51,7 +76,7 @@ async function captureFromPort(port, seconds, signal, onProgress, rxMHz = null) 
         }
         if (phase === "ready") {
           if (line === "SSTV BUSY") await send("STOP");
-          if (/^SSTV MODE (TX|SCAN)$/.test(line) || (line === "SSTV READY 1" && rxMHz !== null)) {
+          if (/^SSTV MODE (TX|SCAN|CHAT)$/.test(line) || (line === "SSTV READY 1" && rxMHz !== null)) {
             phase = "tune";
             deadline = Date.now() + 6000;
             await send(rxMHz === null ? "RX" : "RX " + rxMHz);
@@ -108,7 +133,5 @@ async function captureFromPort(port, seconds, signal, onProgress, rxMHz = null) 
     if (phase !== "done") await send("STOP").catch(() => {});
     await reader.cancel().catch(() => {});
     reader.releaseLock();
-    writer.releaseLock();
-    await port.close().catch(() => {});
   }
 }

@@ -2,7 +2,8 @@
 #include <Arduino.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
-#include "soc/gpio_struct.h"
+#include "soc/soc.h"
+#include "soc/gpio_reg.h"
 
 namespace {
 
@@ -29,7 +30,7 @@ uint32_t checksum = 0;
 
 void IRAM_ATTR samplePin() {
   if (!blocksRemaining || overrun) return;
-  packedByte = (packedByte << 1) | ((GPIO.in & dataMask) != 0);
+  packedByte = (packedByte << 1) | ((REG_READ(GPIO_IN_REG) & dataMask) != 0);
   ++bitCount;
   if ((bitCount & 7) != 0) return;
   assembling.data[(bitCount >> 3) - 1] = packedByte;

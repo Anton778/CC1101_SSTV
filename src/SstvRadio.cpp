@@ -2,19 +2,21 @@
 #include "Robot36Tx.h"
 #include "ImageStore.h"
 #include "RxCapture.h"
+#include "BoardProfile.h"
+#include "PacketChat.h"
 #include "StationCommands.h"
 #include <SPI.h>
+#include <esp_psram.h>
 #include <RadioLib.h>
 #include <cmath>
 
 namespace {
-constexpr uint8_t PIN_SCK = 18, PIN_MISO = 19, PIN_MOSI = 23;
-constexpr uint8_t PIN_CS = 21, PIN_GDO0 = 4, PIN_GDO2 = 27;
-CC1101 radio = new Module(PIN_CS, PIN_GDO0, RADIOLIB_NC, PIN_GDO2);
+using namespace BoardProfile;
+CC1101 radio = new Module(PIN_CS, PIN_GDO0, RADIOLIB_NC, PIN_GDO2, SPI);
 
 SstvMode mode = SSTV_RX;
 ScanRange defaultScan{}, scan{};
-double txMHz, rxMHz, offsetKHz;
+double txMHz, rxMHz, chatMHz, offsetKHz;
 int8_t txPowerDbm;
 bool ready = false, repeatImages = true, repeatScan = false;
 uint32_t nextFrameMs = 0, nextScanMs = 0;
@@ -49,7 +51,12 @@ bool validRange(const ScanRange& r) {
          firstBand && firstBand == band(correctedHz(r.endKHz * 1000.0));
 }
 const char* modeName() {
-  return mode == SSTV_TX ? "TX" : (mode == SSTV_SCAN ? "SCAN" : "RX");
+  switch (mode) {
+    case SSTV_TX: return "TX";
+    case SSTV_SCAN: return "SCAN";
+    case SSTV_CHAT: return "CHAT";
+    default: return "RX";
+  }
 }
 void releaseOutput() {
   if (Robot36Tx::active()) {
@@ -65,6 +72,7 @@ bool radioOK(const char* operation, int16_t code) {
   interruptFrame("RADIO");
   ready = false;
   mode = SSTV_RX;
+  Serial.println("FIELD ERROR RADIO");
   Serial.printf("SSTV ERROR RADIO %s %d\n", operation, code);
   return false;
 }
@@ -74,21 +82,30 @@ void cancelRecording() {
 }
 bool selectMode(SstvMode requested, double channelMHz) {
   if (ready && requested == mode && requested != SSTV_SCAN &&
-      (mode != SSTV_RX || channelMHz == rxMHz)) return true;
+      (mode != SSTV_RX || channelMHz == rxMHz) && (mode != SSTV_CHAT || channelMHz == chatMHz)) {
+    Serial.printf("FIELD MODE %s %.6f\n", modeName(), channelMHz);
+    return true;
+  }
   const uint32_t hz = correctedHz(channelMHz * 1e6);
   if (!band(hz)) { Serial.println("SSTV ERROR CHANNEL"); return false; }
   if (rxRecording()) cancelRecording();
   const bool interrupted = Robot36Tx::active();
   if (requested != SSTV_TX) interruptFrame("INTERRUPTED");
   releaseOutput();
-  if (!ready) {
+  if (!ready || ((mode == SSTV_CHAT) != (requested == SSTV_CHAT))) {
     ConfigFSK_t config;
+    if (requested == SSTV_CHAT) {
+      config.bitRate = 9600;
+      config.receiverBandwidth = 58000;
+    }
     config.frequency = hz;
     config.power = txPowerDbm;
     if (!radioOK("radio.begin", radio.begin(config))) return false;
     Serial.println("radio.begin = 0");
-    if (!radioOK("setFrequencyDeviation", radio.setFrequencyDeviation(2000))) return false;
-    Serial.println("setFrequencyDeviation = 0");
+    if (requested != SSTV_CHAT) {
+      if (!radioOK("setFrequencyDeviation", radio.setFrequencyDeviation(2000))) return false;
+      Serial.println("setFrequencyDeviation = 0");
+    }
   }
   if (!radioOK("standby", radio.standby())) return false;
   if (interrupted) Serial.println("Текущий кадр прерван.");
@@ -101,6 +118,9 @@ bool selectMode(SstvMode requested, double channelMHz) {
       return false;
     }
     nextFrameMs = millis();
+  } else if (requested == SSTV_CHAT) {
+    if (!radioOK("packet RX", PacketChat::configure(radio))) return false;
+    chatMHz = channelMHz;
   } else {
     const uint32_t bandwidth = requested == SSTV_SCAN ? 58000 : ConfigFSK_t{}.receiverBandwidth;
     if (!radioOK("setRxBandwidth", radio.setRxBandwidth(bandwidth)) ||
@@ -111,6 +131,7 @@ bool selectMode(SstvMode requested, double channelMHz) {
   }
   mode = requested;
   ready = true;
+  Serial.printf("FIELD MODE %s %.6f\n", modeName(), channelMHz);
   Serial.printf("Режим %s, канал %.6f МГц, поправка %+.3f кГц, задано CC1101 %.6f МГц\n",
                 modeName(), channelMHz, offsetKHz, hz / 1e6);
   return true;
@@ -118,17 +139,31 @@ bool selectMode(SstvMode requested, double channelMHz) {
 void printHelp() {
   Serial.println("TX | RX [канал_МГц] | Start_SSTV | Stop SSTV | STATUS | HELP");
   Serial.println("В RX: SCAN или SCAN начало_кГц конец_кГц порог_дБм [шаг_кГц]");
+  Serial.println("CHAT [канал_МГц] | INFO");
   Serial.println("Пример: SCAN 433720 434120 -75 25");
 }
 void command(const StationCommand& cmd) {
-  if (ImageStore::busy() && (cmd.kind == Command::Rx || cmd.kind == Command::Tx ||
+  if (ImageStore::busy() && (cmd.kind == Command::Rx || cmd.kind == Command::Tx || cmd.kind == Command::Chat ||
       cmd.kind == Command::StartImage || cmd.kind == Command::StopImage)) abortUpload("INTERRUPTED");
   switch (cmd.kind) {
+    case Command::Info:
+      Serial.printf("FIELD INFO 1 %s %s %.6f %.6f %.6f %d %d %u %u\n", BoardProfile::NAME, modeName(),
+                    txMHz, rxMHz, chatMHz, ready, repeatImages,
+                    unsigned(ESP.getFlashChipSize() >> 20), unsigned(esp_psram_get_size() >> 20));
+      break;
+    case Command::Chat:
+      if (rxRecording()) { Serial.println("FIELD ERROR BUSY"); break; }
+      selectMode(SSTV_CHAT, cmd.rxMHz ? cmd.rxMHz : chatMHz);
+      break;
+    case Command::ChatMessage:
+      if (!ready || mode != SSTV_CHAT) Serial.println("CHAT ERROR MODE");
+      else radioOK("chat RX", PacketChat::send(radio, cmd.payload));
+      break;
     case Command::ImageHello:
       Serial.println("IMG READY 1");
       break;
     case Command::ImageBegin: {
-      if (rxRecording() || awaitingFrame || ImageStore::busy()) { imageError("BUSY"); break; }
+      if (rxRecording() || mode == SSTV_CHAT || awaitingFrame || ImageStore::busy()) { imageError("BUSY"); break; }
       if (!ready) { imageError("RADIO"); break; }
       const char* error = ImageStore::begin(cmd.imageSizeOrOffset, cmd.imageCrc);
       if (error) { imageError(error); break; }
@@ -177,6 +212,7 @@ void command(const StationCommand& cmd) {
     case Command::StartImage:
       if (mode != SSTV_TX || !ready) { Serial.println("Для передачи сначала введите TX."); break; }
       repeatImages = true;
+      Serial.println("FIELD REPEAT 1");
       nextFrameMs = millis();
       Serial.println(Robot36Tx::active() ? "Кадр уже передаётся." : "Передача SSTV запущена.");
       break;
@@ -187,12 +223,13 @@ void command(const StationCommand& cmd) {
         releaseOutput();
         if (!radioOK("standby", radio.standby())) break;
       }
+      Serial.println("FIELD REPEAT 0");
       Serial.println("Передача SSTV остановлена.");
       break;
     case Command::Scan:
       if (!ready || mode != SSTV_RX) { Serial.println("Для нового прохода сначала введите RX."); break; }
       if (rxRecording() || ImageStore::busy()) { Serial.println("SSTV BUSY"); break; }
-      if (!validRange(cmd.scan)) { Serial.println("Ошибка границ, шага или порога сканирования."); break; }
+      if (!validRange(cmd.scan)) { Serial.println("FIELD ERROR RANGE"); Serial.println("Ошибка границ, шага или порога сканирования."); break; }
       scan = cmd.scan;
       repeatScan = false;
       selectMode(SSTV_SCAN, scan.startKHz / 1000.0);
@@ -227,14 +264,17 @@ void command(const StationCommand& cmd) {
 }  // namespace
 
 void beginStation(SstvMode initial, double channelMHz, double correctionKHz, int8_t powerDbm,
-                  const ScanRange& defaults) {
+                  const ScanRange& defaults, double defaultChatMHz) {
   Serial.setRxBufferSize(2048);
+#if !ARDUINO_USB_CDC_ON_BOOT || ARDUINO_USB_MODE
   Serial.setTxBufferSize(2048);
+#endif
   Serial.begin(115200);
   delay(1500);
   Serial.println("=== SSTV ROBOT 36 / DDS / ESP32 + CC1101 ===");
   SPI.begin(PIN_SCK, PIN_MISO, PIN_MOSI, PIN_CS);
   txMHz = rxMHz = channelMHz;
+  chatMHz = defaultChatMHz;
   offsetKHz = correctionKHz;
   txPowerDbm = powerDbm;
   defaultScan = scan = defaults;
@@ -243,7 +283,7 @@ void beginStation(SstvMode initial, double channelMHz, double correctionKHz, int
     Serial.println("Ошибка настроек поиска. Переход в RX.");
     initial = SSTV_RX;
   }
-  const double firstMHz = initial == SSTV_SCAN ? scan.startKHz / 1000.0 : channelMHz;
+  const double firstMHz = initial == SSTV_SCAN ? scan.startKHz / 1000.0 : (initial == SSTV_CHAT ? chatMHz : channelMHz);
   ImageStore::load();
   printHelp();
   selectMode(initial, firstMHz);
@@ -271,9 +311,18 @@ float measureReceiveRssi(int frequencyKHz) {
   }
   return sum / 4;
 }
-void finishScan() {
+void reportScanPoint(int frequencyKHz, float rssi, bool above) {
+  Serial.printf("%d кГц  %.1f дБм  %s\n", frequencyKHz, rssi, above ? "СИГНАЛ" : "");
+  Serial.printf("FIELD POINT %d %.2f %d\n", frequencyKHz, rssi, above);
+}
+void finishScan(int hits, int peakKHz, float peakDbm) {
+  Serial.printf("FIELD DONE %d %d %.2f\n", hits, peakKHz, peakDbm);
   if (repeatScan) nextScanMs = millis() + 1000;
   else selectMode(SSTV_RX, rxMHz);
+}
+void listenForChat() {
+  if (ready && digitalRead(BoardProfile::PIN_GDO0)) radioOK("chat RX", PacketChat::receive(radio));
+  delay(1);
 }
 void listenForPicture() {
   static uint32_t previousReport = 0;

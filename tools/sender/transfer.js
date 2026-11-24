@@ -31,6 +31,7 @@ const ImageTransfer = (() => {
       this.port = port;
       this.onLoss = onLoss;
       this.lines = [];
+      this.subscribers = new Set();
       this.reader = port.readable.getReader();
       this.writer = port.writable.getWriter();
       this.pump = this.read();
@@ -47,7 +48,10 @@ const ImageTransfer = (() => {
           if (rest.length > 4096) throw Error("Нарушены границы сообщений USB.");
           for (const raw of lines) {
             const line = raw.trim();
-            if (!line.startsWith("IMG ")) continue;
+            if (!line.startsWith("IMG ")) {
+              for (const listener of this.subscribers) listener(line);
+              continue;
+            }
             if (this.waiter) this.waiter.resolve(line);
             else {
               this.lines.push(line);
@@ -59,8 +63,13 @@ const ImageTransfer = (() => {
       finally {
         this.failure ||= Error("Соединение с платой закрыто.");
         this.waiter?.reject(this.failure);
+        for (const listener of this.subscribers) listener(null);
         if (!this.closing) this.onLoss(this.failure);
       }
+    }
+    subscribe(listener) {
+      this.subscribers.add(listener);
+      return () => this.subscribers.delete(listener);
     }
     async write(line) {
       if (this.failure) throw this.failure;

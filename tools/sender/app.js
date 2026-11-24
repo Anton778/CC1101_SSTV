@@ -1,6 +1,8 @@
 (() => {
   const el = id => document.getElementById(id);
   const items = [];
+  const station = window.fieldStation;
+  if (station) station.onAvailable = () => drain();
   let link = null, online = false, running = false, changingPort = false;
   const stages = {
     preparing: "Подготовка картинки…", waiting: "Ожидает передачи", begin: "Запрос к плате…",
@@ -12,7 +14,7 @@
     el("led").classList.toggle("online", connected);
     el("connection").textContent = title;
     el("hint").textContent = hint;
-    el("connect").textContent = connected ? "Отключить" : "Подключить передатчик";
+    el("connect").textContent = connected ? "Отключить" : (station ? "Подключить плату" : "Подключить передатчик");
   }
   function remove(item) {
     items.splice(items.indexOf(item), 1);
@@ -68,10 +70,10 @@
     }
   }
   async function drain() {
-    if (running || !online) return;
+    if (running || !online || (station && !station.canSend())) return;
     running = true;
     try {
-      while (online) {
+      while (online && (!station || station.canSend())) {
         const item = items.find(candidate => candidate.stage !== "sent");
         if (!item || item.stage !== "waiting") break;
         setStage(item, "begin");
@@ -88,6 +90,7 @@
   async function disconnect(session, reason) {
     if (session !== link) return;
     link = null;
+    station?.detach(session);
     connection(false, "Плата отключена", reason);
     try { await session.close(); } catch {}
   }
@@ -101,12 +104,13 @@
         return;
       }
       port = await navigator.serial.requestPort();
-      await port.open({baudRate: 115200, bufferSize: 8192, flowControl: "none"});
+      await port.open({baudRate: 115200, bufferSize: 32768, flowControl: "none"});
       session = new ImageTransfer.Link(port, () => disconnect(session, "USB-соединение потеряно. Подключите плату снова."));
       link = session;
       connection(false, "Проверяем прошивку…", "Ожидаем ответ ESP32 через выбранный порт.");
       await session.hello();
-      connection(true, "Передатчик подключён", "Можно добавлять изображения в очередь.");
+      if (station) await station.attach(session);
+      connection(true, station ? "Плата подключена" : "Передатчик подключён", station ? station.boardLabel() : "Можно добавлять изображения в очередь.");
       drain();
     } catch (error) {
       if (session) await disconnect(session, error.message);

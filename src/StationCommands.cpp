@@ -43,6 +43,9 @@ void parseImage(char* args, StationCommand& cmd) {
 }
 void parse(char* line, const ScanRange& defaults, StationCommand& cmd) {
   // Base64 различает регистр. Текстовые команды пользователя обрабатываем отдельно.
+  if (!strncmp(line, "MSG ", 4)) {
+    cmd.kind = Command::ChatMessage; cmd.payload = line + 4; return;
+  }
   if (!strncmp(line, "IMG ", 4)) { parseImage(line + 4, cmd); return; }
   for (char* p = line; *p; ++p) {
     if (*p >= 'a' && *p <= 'z') *p -= 'a' - 'A';
@@ -58,6 +61,8 @@ void parse(char* line, const ScanRange& defaults, StationCommand& cmd) {
   if (!n) return;
   const char* name = words[0];
   if (n == 1 && (!strcmp(name, "HELP") || !strcmp(name, "?"))) cmd.kind = Command::Help;
+  else if (n == 1 && !strcmp(name, "INFO")) cmd.kind = Command::Info;
+  else if (!strcmp(name, "CHAT") && (n == 1 || (n == 2 && number(words[1], cmd.rxMHz) && cmd.rxMHz > 0))) cmd.kind = Command::Chat;
   else if (n == 1 && !strcmp(name, "STATUS")) cmd.kind = Command::Status;
   else if (n == 1 && !strcmp(name, "TX")) cmd.kind = Command::Tx;
   else if (!strcmp(name, "RX") && (n == 1 || (n == 2 && number(words[1], cmd.rxMHz) && cmd.rxMHz > 0))) cmd.kind = Command::Rx;

@@ -2,7 +2,7 @@
 #include "SstvRadio.h"
 
 enum class Command { Invalid, Help, Status, Tx, Rx, StartImage, StopImage, Scan, Ping, Record, StopRecording,
-                     ImageHello, ImageBegin, ImageBlock, ImageEnd, ImageCancel, ImageInvalid };
+                     Info, Chat, ChatMessage, ImageHello, ImageBegin, ImageBlock, ImageEnd, ImageCancel, ImageInvalid };
 struct StationCommand {
   Command kind = Command::Invalid;
   double rxMHz = 0;             // Ноль означает текущий канал приёма.

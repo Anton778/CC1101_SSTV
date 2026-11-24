@@ -1,7 +1,8 @@
 #include "Robot36Tx.h"
 #include "ImageStore.h"
 #include <Arduino.h>
-#include "soc/gpio_struct.h"
+#include "soc/soc.h"
+#include "soc/gpio_reg.h"
 #include "../image_data.h"
 
 namespace {
@@ -16,7 +17,7 @@ static_assert(sizeof(image_map) / sizeof(image_map[0]) ==
 // === СИНТЕЗ ЗВУКОВОГО ТОНА С НЕПРЕРЫВНОЙ ФАЗОЙ (DDS) ===
 // В отличие от ledcChangeFrequency(), изменение частоты не сбрасывает фазу.
 // GPIO4 работает как цифровой вход асинхронной 2-FSK CC1101.
-// Arduino-ESP32 3.x, только классический ESP32/ESP32-WROOM-32.
+// Arduino-ESP32 3.x, ESP32 и ESP32-S3.
 constexpr uint32_t AUDIO_TICK_HZ = 80000; // 12,5 мкс между отсчётами
 uint32_t dataMask = 0;
 hw_timer_t* audioTimer = nullptr;
@@ -31,9 +32,9 @@ void IRAM_ATTR audioISR() {
   phaseAcc += phaseStep;
   // Прямой доступ к регистрам GPIO (быстро, без digitalWrite в ISR).
   if (phaseAcc & 0x80000000UL) {
-    GPIO.out_w1ts = dataMask;
+    REG_WRITE(GPIO_OUT_W1TS_REG, dataMask);
   } else {
-    GPIO.out_w1tc = dataMask;
+    REG_WRITE(GPIO_OUT_W1TC_REG, dataMask);
   }
 }
 
