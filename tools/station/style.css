@@ -253,6 +253,24 @@ nav button[aria-pressed="true"] {
 .fields.two {
   grid-template-columns: 1fr 1fr;
 }
+#range-form .fields {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr));
+}
+#range-plot {
+  display: block;
+  width: 100%;
+  max-width: 720px;
+  margin-top: 14px;
+  border: 1px solid var(--edge);
+  border-radius: 3px;
+}
+#range-frequency {
+  color: var(--yellow);
+  font-variant-numeric: tabular-nums;
+}
+#view-sweep .card + .card {
+  margin-top: 16px;
+}
 .chat-settings {
   grid-template-columns: 1fr 1fr auto;
   align-items: center;

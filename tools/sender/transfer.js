@@ -3,9 +3,9 @@ const ImageTransfer = (() => {
   const maxBytes = 65536;
   const blockSize = 768;
   const errors = {
-    BUSY: "Плата занята записью или передачей заказанного кадра. Дождитесь окончания и повторите.",
+    BUSY: "Плата занята. Если включён радиочат, перейдите в TX. При записи или передаче кадра дождитесь её окончания и нажмите «Повторить».",
     RADIO: "ESP32 сообщила об ошибке CC1101. Проверьте подключение радиомодуля.",
-    PARTITION: "Плате нужен пустой раздел spiffs или раздел с LittleFS. Проверьте разметку памяти в Arduino IDE.",
+    PARTITION: "Эта прошивка требует LittleFS. Обновите прошивку из проекта один раз, чтобы передавать кадры из ОЗУ.",
     STORAGE: "Плата не смогла сохранить кадр. Проверьте свободное место в LittleFS.",
     MEMORY: "ESP32 не хватило оперативной памяти для картинки.",
     JPEG: "Плата не смогла декодировать JPEG размером 320 × 240.",
@@ -130,6 +130,10 @@ const ImageTransfer = (() => {
     if (!bytes.length || bytes.length > maxBytes) throw Error("Кадр превышает размер буфера ESP32.");
     const id = crcHex(bytes);
     let uploading = false;
+    let storage = "FLASH"; // Прежняя прошивка подтверждала только кадры, записанные во флеш.
+    const unsubscribe = link.subscribe(line => {
+      if (line === "FIELD IMAGE " + id + " RAM") storage = "RAM";
+    });
     try {
       await link.write("IMG BEGIN " + bytes.length + " " + id);
       await link.expect("IMG ACCEPT " + id + " " + blockSize, 6000);
@@ -147,15 +151,15 @@ const ImageTransfer = (() => {
       await link.expect("IMG STORED " + id, 25000);
       uploading = false;
       await link.expect("IMG AIR " + id, 6000);
-      update("air");
+      update("air", undefined, storage);
       await link.expect("IMG SENT " + id, 55000);
-      update("sent");
+      update("sent", undefined, storage);
     } catch (error) {
       if (uploading) {
         try { await link.write("IMG CANCEL"); } catch {}
       }
       throw error;
-    }
+    } finally { unsubscribe(); }
   }
   return {Link, send, crcHex, maxBytes};
 })();

@@ -13,6 +13,7 @@ bool busy();
 size_t received();
 bool expired(uint32_t now);
 bool hasImage();
+bool inRam();                        // Активный USB-кадр хранится до перезапуска.
 bool openFrame();
 bool readRow(uint16_t* pixels);
 void closeFrame();

@@ -128,6 +128,7 @@ window.fieldStation = (() => {
         inChat("chat-state").textContent = "Приём пакетов на " + activeMHz.toFixed(3) + " МГц.";
       else inChat("chat-state").textContent = "Для обмена включите чат на обоих постах.";
       render();
+      api.onAvailable?.();
       return;
     }
     if (line.startsWith("FIELD ERROR RADIO") || line === "SSTV ERROR DDS") {
@@ -391,6 +392,7 @@ window.fieldStation = (() => {
     session: () => (info ? port : null),
     canRecord: () => Boolean(info?.ready && !busy && !recording),
     canSend: () => Boolean(info?.ready && mode === "TX" && !busy && !recording && !paused),
+    canStartSend: () => Boolean(info?.ready && !busy && !recording && (mode !== "TX" || paused)),
     boardLabel: () =>
       info
         ? boards[info.board] +
@@ -429,7 +431,7 @@ window.fieldStation = (() => {
       activeMHz = mode === "TX" ? +m[3] : mode === "CHAT" ? +m[5] : mode === "RX" ? +m[4] : 0;
       el("rx-channel").value = m[4];
       inChat("chat-channel").value = m[5];
-      paused = false;
+      paused = m[7] === "0";
       if (!info.ready)
         show(
           "operation",
@@ -469,5 +471,6 @@ window.fieldStation = (() => {
   };
   render();
   drawScan();
+  if (location.hash === "#sweep") tab("sweep");
   return api;
 })();

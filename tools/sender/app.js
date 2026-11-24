@@ -2,11 +2,11 @@
   const el = id => document.getElementById(id);
   const items = [];
   const station = window.fieldStation;
-  if (station) station.onAvailable = () => drain();
+  if (station) station.onAvailable = () => { refresh(); drain(); };
   let link = null, online = false, running = false, changingPort = false;
   const stages = {
     preparing: "Подготовка картинки…", waiting: "Ожидает передачи", begin: "Запрос к плате…",
-    usb: "Загрузка по USB", saving: "Плата проверяет и сохраняет кадр…",
+    usb: "Загрузка по USB", saving: "Плата проверяет кадр…",
     air: "В эфире · Robot 36", sent: "Передано · 240 строк", failed: "Передача прервана"
   };
   function connection(connected, title, hint) {
@@ -15,6 +15,7 @@
     el("connection").textContent = title;
     el("hint").textContent = hint;
     el("connect").textContent = connected ? "Отключить" : (station ? "Подключить плату" : "Подключить передатчик");
+    refresh();
   }
   function remove(item) {
     items.splice(items.indexOf(item), 1);
@@ -26,6 +27,10 @@
   function refresh() {
     el("empty").hidden = Boolean(items.length);
     el("clear").hidden = !items.some(item => item.stage === "sent");
+    if (station) {
+      const next = items.find(item => item.stage !== "sent");
+      el("queue-tx").hidden = !(next?.stage === "waiting" && online && station.canStartSend());
+    }
   }
   function setStage(item, stage, message, fraction) {
     item.stage = stage;
@@ -78,7 +83,10 @@
         if (!item || item.stage !== "waiting") break;
         setStage(item, "begin");
         try {
-          await ImageTransfer.send(link, item.image.bytes, (stage, fraction) => setStage(item, stage, null, fraction));
+          await ImageTransfer.send(link, item.image.bytes, (stage, fraction, storage) => {
+            const message = storage === "RAM" ? stages[stage] + " · в ОЗУ до перезапуска" : null;
+            setStage(item, stage, message, fraction);
+          });
           el("notice").textContent = "Передано: " + item.row.querySelector(".filename").textContent;
         } catch (error) {
           setStage(item, "failed", error.message + " Очередь приостановлена.");
@@ -118,6 +126,7 @@
     } finally { changingPort = el("connect").disabled = false; }
   };
   const drop = el("drop");
+  if (station) el("queue-tx").onclick = () => el("tx").click();
   drop.onclick = () => el("files").click();
   el("files").onchange = event => { add(event.target.files); event.target.value = ""; };
   for (const type of ["dragover", "drop"]) window.addEventListener(type, event => event.preventDefault());

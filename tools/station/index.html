@@ -14,6 +14,7 @@
     <script defer src="../sender/transfer.js"></script>
     <script defer src="../sender/image.js"></script>
     <script defer src="console.js"></script>
+    <script defer src="range-model.js"></script>
     <script defer src="../sender/app.js"></script>
     <script defer src="../receiver/app.js"></script>
   </head>
@@ -55,7 +56,7 @@
         ><button data-view="receive" aria-pressed="false">Приём SSTV</button>
         <button data-view="scan" aria-pressed="false">Поиск сигнала</button
         ><button data-view="chat" aria-pressed="false">Радиочат</button>
-        <button data-view="sweep" aria-pressed="false">Опыт со свипом</button>
+        <button data-view="sweep" aria-pressed="false">Постановка помехи</button>
       </nav>
       <div id="view-pictures" class="view">
         <div class="workspace">
@@ -84,9 +85,10 @@
             </div>
             <p class="empty" id="empty">Очередь пуста. Можно добавить сразу несколько файлов.</p>
             <ol id="queue"></ol>
+            <button id="queue-tx" type="button" hidden>Включить TX и передать</button>
             <p class="note">
-              Кадр занимает 36,91 с в эфире. После завершения очереди плата повторяет последнюю картинку, в том
-              числе при автономном питании в режиме TX.
+              Кадр занимает 36,91 с в эфире. Плата повторяет его в режиме TX. Кадр во флеш сохраняется
+              после выключения питания, кадр в ОЗУ — до перезапуска.
             </p>
           </section>
         </div>
@@ -234,6 +236,24 @@
         </p>
       </div>
       <div id="view-sweep" class="view" hidden>
+        <section class="experiment card" aria-labelledby="range-title">
+          <h2 id="range-title">Свип по диапазону</h2>
+          <p>График показывает ход частоты от начальной до конечной и обратно. Браузер рассчитывает его локально, без передачи в эфир.</p>
+          <form id="range-form">
+            <div class="fields">
+              <label>Начальная частота, МГц<input id="range-from" type="number" min="0.000001" step="any" value="433.850" required /></label>
+              <label>Конечная частота, МГц<input id="range-to" type="number" min="0.000001" step="any" value="433.950" required /></label>
+              <label>Полный период, с<input id="range-period" type="number" min="0.1" max="120" step="any" value="4" required /></label>
+            </div>
+            <div class="actions">
+              <button id="range-run" type="submit">Запустить модель</button>
+              <button id="range-stop" type="button" class="secondary" disabled>Остановить</button>
+            </div>
+          </form>
+          <canvas id="range-plot" width="720" height="195" aria-label="Частота модели в мегагерцах в течение одного периода"></canvas>
+          <p>Текущая частота модели <b id="range-frequency">—</b></p>
+          <p id="range-status" role="status"></p>
+        </section>
         <section class="experiment card">
           <h2>Модель звуковой помехи</h2>
           <p>

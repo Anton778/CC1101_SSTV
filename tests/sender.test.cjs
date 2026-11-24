@@ -89,3 +89,30 @@ test("пропавшее соединение или подтверждение 
     } finally { await link.close(); }
   }
 });
+
+test("очередь завершает кадр из ОЗУ и различает подтверждения следующих картинок", async () => {
+  const first = Uint8Array.of(10, 15), second = Uint8Array.of(11, 16);
+  const ramId = crcHex(first);
+  let id;
+  const {link} = portFor((line, reply) => {
+    if (line.startsWith("IMG BEGIN ")) {
+      id = line.split(" ").at(-1);
+      reply("IMG ACCEPT " + id + " 768");
+    }
+    if (line.startsWith("IMG DATA ")) reply("IMG ACK 2");
+    if (line.startsWith("IMG END ")) {
+      // У старой прошивки нет FIELD IMAGE. Запоздалое сообщение про другой кадр допустимо.
+      reply("FIELD IMAGE " + ramId + " RAM\nIMG STORED " + id + "\nIMG AIR " + id + "\nIMG SENT " + id);
+    }
+  });
+  try {
+    for (const [bytes, location] of [[first, "RAM"], [second, "FLASH"]]) {
+      const reports = [];
+      await send(link, bytes, (stage, _, storage) => {
+        if (stage === "air" || stage === "sent") reports.push([stage, storage]);
+      });
+      assert.deepEqual(reports, [["air", location], ["sent", location]]);
+      assert.equal(link.subscribers.size, 0);
+    }
+  } finally { await link.close(); }
+});

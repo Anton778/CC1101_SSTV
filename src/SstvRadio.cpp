@@ -186,6 +186,7 @@ void command(const StationCommand& cmd) {
       ImageStore::cancel();
       if (error) { imageError(error); break; }
       frameId = cmd.imageCrc;
+      Serial.printf("FIELD IMAGE %08lx %s\n", (unsigned long)frameId, ImageStore::inRam() ? "RAM" : "FLASH");
       Serial.printf("IMG STORED %08lx\n", (unsigned long)frameId);
       if (!selectMode(SSTV_TX, txMHz)) { imageError("RADIO"); break; }
       repeatImages = awaitingFrame = true;
@@ -238,7 +239,8 @@ void command(const StationCommand& cmd) {
       Serial.printf("Режим %s, радио %s, TX %.6f МГц, RX %.6f МГц, кадры %s, повторы %s\n",
                     modeName(), ready ? "готово" : "ошибка", txMHz, rxMHz,
                     Robot36Tx::active() ? "в эфире" : "в ожидании", repeatImages ? "вкл" : "выкл");
-      Serial.println(ImageStore::hasImage() ? "Картинка из USB-загрузки." : "Встроенная картинка.");
+      if (ImageStore::inRam()) Serial.println("Картинка из USB-загрузки в ОЗУ до перезапуска.");
+      else Serial.println(ImageStore::hasImage() ? "Картинка из USB-загрузки во флеш." : "Встроенная картинка.");
       break;
     case Command::Ping:
       if (!ready) Serial.println("SSTV ERROR RADIO");
