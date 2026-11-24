@@ -17,7 +17,7 @@
 
 Переименовать распакованную папку в SSTV_Robot36_DDS и открыть в ней SSTV_Robot36_DDS.ino.
 Скетч, image_data.h и папку src хранить вместе. Полная инструкция приведена в README.md.
-Платы: ESP32 Dev Module и ESP32S3 Dev Module (N16R8), Arduino-ESP32 3.1.3.
+Платы: ESP32 Dev Module и ESP32S3 Dev Module (N16R8).
 Для S3 выбрать Flash Size 16MB, OPI PSRAM, Default 4MB with spiffs. Для USB–UART отключить USB CDC On Boot.
 Для штатного USB S3 выбрать Hardware CDC and JTAG и включить USB CDC On Boot.
 Установить библиотеку RadioLib 8.0.0.
@@ -74,5 +74,6 @@ SDR: NFM, полоса 12-15 кГц, шумоподавитель выключе
  - исходный RGB565-файл не редактируется;
  - ведётся диагностика опозданий по временным границам.
 
-Общий скетч собирается для ESP32 Dev Module и ESP32S3 Dev Module N16R8 с Arduino-ESP32 3.1.3 и RadioLib 8.0.0.
+Сборка проверена для обеих плат с Arduino-ESP32 3.1.3, 3.3.12 и 4.0.0 и библиотекой RadioLib 8.0.0.
+При ошибке «esp_jpg_decode.h: No such file or directory» заменить src/ImageStore.cpp файлом из текущей версии проекта.
 Передавать только в разрешённых условиях и с подключённой антенной.

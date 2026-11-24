@@ -100,12 +100,12 @@
 
 ## 3. Сборка и загрузка в Arduino IDE
 
-1. В настройках Arduino IDE добавьте в список дополнительных адресов менеджера плат `https://espressif.github.io/arduino-esp32/package_esp32_index.json`. В менеджере плат установите **esp32 by Espressif Systems** версии **3.1.3** (ветка 3.x). [Инструкция Espressif](https://docs.espressif.com/projects/arduino-esp32/en/latest/installing.html)
+1. В настройках Arduino IDE добавьте в список дополнительных адресов менеджера плат `https://espressif.github.io/arduino-esp32/package_esp32_index.json`. В менеджере плат выберите **esp32 by Espressif Systems**. Сборка проверена с версиями **3.1.3**, **3.3.12** и **4.0.0**. [Инструкция Espressif](https://docs.espressif.com/projects/arduino-esp32/en/latest/installing.html)
 2. Через менеджер библиотек установите **RadioLib** автора **Jan Gromeš**, версия **8.0.0**. Скетч использует интерфейс конфигурации `ConfigFSK_t` и вызов `transmitDirectAsync()`. [RadioLib 8.0.0](https://github.com/jgromes/RadioLib/releases/tag/8.0.0)
 3. Откройте `SSTV_Robot36_DDS/SSTV_Robot36_DDS.ino`. В Arduino IDE выберите свою плату, схему разделов и USB-порт по таблице в разделе «Пульт научной роты». Прошивка использует этот раздел для LittleFS. Занятый раздел с другой файловой системой автоматически не форматируется.
 4. Нажмите **Проверить**, затем **Загрузить**. Откройте монитор порта на **115200 бод**. При успешном запуске появляется `radio.begin = 0`. Для SSTV и поиска дополнительно выводится `setFrequencyDeviation = 0`. В TX появятся `DDS tick: 80000 Гц`, а при начале кадра — `TX START` и `transmitDirectAsync = 0`. В RX появятся `receiveDirectAsync = 0` и показания RSSI в дБм.
 
-Общий скетч собран для **ESP32 Dev Module** и **ESP32S3 Dev Module** с Arduino-ESP32 3.1.3 и RadioLib 8.0.0. Распиновка выбирается при компиляции в [BoardProfile.h](src/BoardProfile.h).
+Скетч собран для **ESP32 Dev Module** и **ESP32S3 Dev Module (N16R8)** на каждой из трёх указанных версий с RadioLib 8.0.0. Загруженные из браузера изображения обрабатывает встроенный JPEG-декодер ESP32. Распиновка выбирается при компиляции в [BoardProfile.h](src/BoardProfile.h).
 
 ### Команды COM-порта
 
@@ -210,6 +210,7 @@
 | Наблюдение | Что проверить |
 | --- | --- |
 | При сборке не найден `src/SstvRadio.h`, `image_data.h` или функция `setup()` | Проверьте, что рядом с `.ino` находятся `image_data.h` и папка `src` целиком. |
+| `esp_jpg_decode.h: No such file or directory` | Замените в своей папке скетча один файл [src/ImageStore.cpp](src/ImageStore.cpp) текущей версией из репозитория и снова нажмите **Проверить**. Отдельную библиотеку JPEG устанавливать не требуется. |
 | Ошибка `static_assert` с упоминанием 320×256 | Повторите преобразование исходника штатным конвертером. Скетч ожидает ровно 81 920 пикселей RGB565. |
 | Ошибка сборки в `timerBegin` или `ConfigFSK_t` | Проверьте выбранную плату, версию пакета ESP32 и версию RadioLib из раздела 3. |
 | `radio.begin` возвращает ненулевой код | Проверьте питание 3,3 В, общий провод и четыре линии SPI. Сверьте маркировку SI и SO на модуле и убедитесь, что CSN подключён к GPIO21. |
