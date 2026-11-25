@@ -4,6 +4,7 @@ window.fieldStation = (() => {
   const el = (id) => document.getElementById(id);
   const chat = el("chat-card"),
     chatHome = el("chat-home");
+  const txChannel = el("tx-channel");
   const inChat = (id) => chat.querySelector("#" + id);
   const modes = { TX: "Передача", RX: "Приём", SCAN: "Поиск", CHAT: "Чат" };
   const boards = { ESP32: "ESP32 Dev Module", ESP32S3: "ESP32-S3" };
@@ -26,6 +27,7 @@ window.fieldStation = (() => {
     threshold = -75;
   const plot = new SpectrumPlot(el("spectrum"), el("scan-cursor"));
   let supportsTuning = false, tuningFailure = "";
+  let supportsTxChannel = false, txChannelEdited = false;
 
   function show(id, message, error = false) {
     const node = el(id);
@@ -47,10 +49,17 @@ window.fieldStation = (() => {
     for (const b of document.querySelectorAll("[data-radio]")) b.disabled = !canAct;
     el("board").disabled = Boolean(port);
     el("mode").textContent = mode ? mode + " · " + modes[mode] : "—";
-    el("frequency").textContent = activeMHz ? activeMHz.toFixed(3) : "—";
+    el("frequency").textContent = activeMHz ? activeMHz.toFixed(mode === "TX" ? 6 : 3) : "—";
     el("tx").setAttribute("aria-pressed", String(mode === "TX"));
     el("rx").setAttribute("aria-pressed", String(mode === "RX"));
     el("stop-tx").disabled = !canAct || mode !== "TX";
+    txChannel.disabled = !canAct || !supportsTxChannel;
+    const txStatus = el("tx-channel-status");
+    const txHint = !info ? "Подключите плату, чтобы прочитать канал TX."
+      : !supportsTxChannel ? "Для смены канала загрузите актуальную прошивку."
+      : txChannelEdited ? "Новый канал будет применён при включении TX."
+      : "Канал SSTV действует до перезапуска платы.";
+    if (txStatus.textContent !== txHint) txStatus.textContent = txHint;
     el("record").disabled = !canAct || !info?.ready;
     el("scan-go").disabled = !canAct || measuring;
     el("scan-stop").disabled = !canAct || mode !== "SCAN";
@@ -82,6 +91,10 @@ window.fieldStation = (() => {
       };
       const off = session.subscribe((line) => {
         if (line === null) finish(reject, Error("Порт отключён."));
+        else if (line === "FIELD ERROR TX_FRAME")
+          finish(reject, Error("Дождитесь конца кадра или нажмите «Стоп SSTV». Затем включите TX на новом канале."));
+        else if (line === "FIELD ERROR TX_CHANNEL")
+          finish(reject, Error("Проверьте канал TX. Частота с учётом поправки должна лежать в рабочем диапазоне CC1101."));
         else if (/^(FIELD ERROR|SSTV ERROR|CHAT ERROR|SSTV BUSY)/.test(line))
           finish(reject, Error("Ответ платы: " + line));
         else if (matches(line)) finish(resolve, line);
@@ -118,6 +131,11 @@ window.fieldStation = (() => {
   }
   function handle(line) {
     if (!line) return;
+    if (line === "FIELD CAP TX_CHANNEL") {
+      supportsTxChannel = true;
+      render();
+      return;
+    }
     let m = /^FIELD TUNING (ACTIVE|PENDING|VOLATILE) (-?\d+) (-?[\d.]+)$/.exec(line);
     if (m) {
       supportsTuning = true;
@@ -142,6 +160,7 @@ window.fieldStation = (() => {
     if (m) {
       mode = m[1];
       activeMHz = Number(m[2]);
+      if (mode === "TX" && !txChannelEdited) txChannel.value = m[2];
       if (info) info.ready = true;
       el("rssi").textContent = "—";
       if (mode !== "SCAN" && measuring) {
@@ -246,12 +265,37 @@ window.fieldStation = (() => {
     tune("TUNING " + el("tx-power").value + " " + el("freq-offset").valueAsNumber.toFixed(3));
   };
   el("reset-tuning").onclick = () => tune("TUNING DEFAULT");
-  el("tx").onclick = () =>
-    action(async () => {
-      await setMode("TX");
+  function startTx() {
+    const changeChannel = supportsTxChannel && txChannelEdited;
+    if (changeChannel && !txChannel.checkValidity()) {
+      tab("pictures");
+      txChannel.reportValidity();
+      return;
+    }
+    const requested = changeChannel ? txChannel.valueAsNumber.toFixed(6) : "";
+    return action(async () => {
+      const session = port;
+      const reply = await setMode("TX", requested);
+      if (port !== session) return;
+      const confirmed = reply.slice("FIELD MODE TX ".length);
+      if (requested && Number(confirmed) !== Number(requested)) throw Error("Плата подтвердила другой канал TX.");
       await request("Start_SSTV", (s) => s === "FIELD REPEAT 1");
+      if (port !== session) return;
+      txChannel.value = confirmed;
+      txChannelEdited = false;
       paused = false;
     });
+  }
+  el("tx").onclick = startTx;
+  el("tx-form").onsubmit = event => {
+    event.preventDefault();
+    startTx();
+  };
+  txChannel.oninput = () => {
+    txChannelEdited = true;
+    render();
+    api.onAvailable?.();
+  };
   el("rx").onclick = () =>
     action(() => {
       if (!el("rx-channel").reportValidity()) return;
@@ -374,8 +418,8 @@ window.fieldStation = (() => {
     onReceiveState: null,
     session: () => (info ? port : null),
     canRecord: () => Boolean(info?.ready && !busy && !recording),
-    canSend: () => Boolean(info?.ready && mode === "TX" && !busy && !recording && !paused),
-    canStartSend: () => Boolean(info?.ready && !busy && !recording && (mode !== "TX" || paused)),
+    canSend: () => Boolean(info?.ready && mode === "TX" && !busy && !recording && !paused && !txChannelEdited),
+    canStartSend: () => Boolean(info?.ready && !busy && !recording && (mode !== "TX" || paused || txChannelEdited)),
     boardLabel: () =>
       info
         ? boards[info.board] +
@@ -412,6 +456,7 @@ window.fieldStation = (() => {
       info = { board: m[1], ready: m[6] === "1", flash: +m[8], ram: +m[9] };
       mode = m[2];
       activeMHz = mode === "TX" ? +m[3] : mode === "CHAT" ? +m[5] : mode === "RX" ? +m[4] : 0;
+      txChannel.value = m[3];
       el("rx-channel").value = m[4];
       inChat("chat-channel").value = m[5];
       paused = m[7] === "0";
@@ -432,6 +477,9 @@ window.fieldStation = (() => {
       unsubscribe?.();
       port = null;
       supportsTuning = false;
+      supportsTxChannel = false;
+      txChannelEdited = false;
+      txChannel.value = "";
       tuningFailure = "";
       el("tx-power").value = "";
       el("freq-offset").value = "";

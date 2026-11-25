@@ -75,6 +75,13 @@
         <div class="workspace">
           <section aria-labelledby="add-title">
             <h2 id="add-title">Изображения</h2>
+            <form id="tx-form" class="tx-settings">
+              <label>Канал передачи, МГц
+                <input id="tx-channel" type="number" min="300" max="928" step="0.000001" required disabled aria-describedby="tx-channel-status">
+              </label>
+              <button data-radio type="submit" disabled>Включить TX</button>
+            </form>
+            <p id="tx-channel-status" class="note" role="status">Подключите плату, чтобы прочитать канал TX.</p>
             <button type="button" id="drop">
               <span class="plus" aria-hidden="true">+</span><b>Перетащите картинки сюда</b>
               <span>или нажмите, чтобы выбрать файлы</span>

@@ -86,7 +86,8 @@ void cancelRecording() {
 }
 bool selectMode(SstvMode requested, double channelMHz, bool retune = false) {
   if (!retune && ready && requested == mode && requested != SSTV_SCAN &&
-      (mode != SSTV_RX || channelMHz == rxMHz) && (mode != SSTV_CHAT || channelMHz == chatMHz)) {
+      (mode != SSTV_TX || channelMHz == txMHz) && (mode != SSTV_RX || channelMHz == rxMHz) &&
+      (mode != SSTV_CHAT || channelMHz == chatMHz)) {
     Serial.printf("FIELD MODE %s %.6f\n", modeName(), channelMHz);
     return true;
   }
@@ -121,6 +122,7 @@ bool selectMode(SstvMode requested, double channelMHz, bool retune = false) {
       Serial.println("SSTV ERROR DDS");
       return false;
     }
+    txMHz = channelMHz;
     nextFrameMs = millis();
   } else if (requested == SSTV_CHAT) {
     if (!radioOK("packet RX", PacketChat::configure(radio))) return false;
@@ -181,14 +183,14 @@ void applyPendingTuning() {
   printTuning();
 }
 void printHelp() {
-  Serial.println("TX | RX [канал_МГц] | Start_SSTV | Stop SSTV | STATUS | HELP");
+  Serial.println("TX [канал_МГц] | RX [канал_МГц] | Start_SSTV | Stop SSTV | STATUS | HELP");
   Serial.println("В RX: SCAN или SCAN начало_кГц конец_кГц порог_дБм [шаг_кГц]");
   Serial.println("CHAT [канал_МГц] | INFO | REC LIVE | STOP");
   Serial.println("TUNING [мощность_дБм поправка_кГц] | TUNING DEFAULT");
   Serial.println("Пример: SCAN 433720 434120 -75 25");
 }
 void command(const StationCommand& cmd) {
-  if (ImageStore::busy() && (cmd.kind == Command::Rx || cmd.kind == Command::Tx || cmd.kind == Command::Chat ||
+  if (ImageStore::busy() && (cmd.kind == Command::Rx || cmd.kind == Command::Chat ||
       cmd.kind == Command::StartImage || cmd.kind == Command::StopImage)) abortUpload("INTERRUPTED");
   switch (cmd.kind) {
     case Command::Info:
@@ -197,6 +199,7 @@ void command(const StationCommand& cmd) {
                     unsigned(ESP.getFlashChipSize() >> 20), unsigned(esp_psram_get_size() >> 20));
       // Отдельная строка сохраняет совместимость INFO с прежним пультом.
       printTuning();
+      Serial.println("FIELD CAP TX_CHANNEL");
       break;
     case Command::TuningGet:
       printTuning();
@@ -218,7 +221,7 @@ void command(const StationCommand& cmd) {
     }
     case Command::Chat:
       if (rxRecording()) { Serial.println("FIELD ERROR BUSY"); break; }
-      selectMode(SSTV_CHAT, cmd.rxMHz ? cmd.rxMHz : chatMHz);
+      selectMode(SSTV_CHAT, cmd.channelMHz ? cmd.channelMHz : chatMHz);
       break;
     case Command::ChatMessage:
       if (!ready || mode != SSTV_CHAT) Serial.println("CHAT ERROR MODE");
@@ -265,11 +268,28 @@ void command(const StationCommand& cmd) {
     case Command::ImageInvalid:
       abortUpload("COMMAND");
       break;
-    case Command::Tx:
-      if (selectMode(SSTV_TX, txMHz)) Serial.println(repeatImages ? "TX: повторы включены." : "TX: кадры остановлены. Для запуска — Start_SSTV.");
+    case Command::TxInvalid:
+      Serial.println("FIELD ERROR TX_CHANNEL");
       break;
+    case Command::Tx: {
+      const double channel = cmd.channelMHz ? cmd.channelMHz : txMHz;
+      if (cmd.channelMHz) {
+        if (!band(correctedHz(channel * 1e6))) { Serial.println("FIELD ERROR TX_CHANNEL"); break; }
+        if (channel != txMHz && (Robot36Tx::active() || awaitingFrame)) {
+          Serial.println("FIELD ERROR TX_FRAME");
+          break;
+        }
+        if (rxRecording() || ImageStore::busy()) { Serial.println("FIELD ERROR BUSY"); break; }
+      } else if (ImageStore::busy()) {
+        abortUpload("INTERRUPTED");
+      }
+      if (selectMode(SSTV_TX, channel)) {
+        Serial.println(repeatImages ? "TX: повторы включены." : "TX: кадры остановлены. Для запуска — Start_SSTV.");
+      }
+      break;
+    }
     case Command::Rx: {
-      const double channel = cmd.rxMHz ? cmd.rxMHz : rxMHz;
+      const double channel = cmd.channelMHz ? cmd.channelMHz : rxMHz;
       if (!band(correctedHz(channel * 1e6))) { Serial.println("SSTV ERROR CHANNEL"); break; }
       if (rxRecording() && channel != rxMHz) { Serial.println("SSTV BUSY"); break; }
       if (selectMode(SSTV_RX, channel)) Serial.printf("SSTV RX %.6f\n", rxMHz);

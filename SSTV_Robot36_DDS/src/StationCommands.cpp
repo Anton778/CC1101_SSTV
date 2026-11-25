@@ -75,10 +75,13 @@ void parse(char* line, const ScanRange& defaults, StationCommand& cmd) {
       }
     }
   }
-  else if (!strcmp(name, "CHAT") && (n == 1 || (n == 2 && number(words[1], cmd.rxMHz) && cmd.rxMHz > 0))) cmd.kind = Command::Chat;
+  else if (!strcmp(name, "CHAT") && (n == 1 || (n == 2 && number(words[1], cmd.channelMHz) && cmd.channelMHz > 0))) cmd.kind = Command::Chat;
   else if (n == 1 && !strcmp(name, "STATUS")) cmd.kind = Command::Status;
-  else if (n == 1 && !strcmp(name, "TX")) cmd.kind = Command::Tx;
-  else if (!strcmp(name, "RX") && (n == 1 || (n == 2 && number(words[1], cmd.rxMHz) && cmd.rxMHz > 0))) cmd.kind = Command::Rx;
+  else if (!strcmp(name, "TX")) {
+    const bool valid = n == 1 || (n == 2 && number(words[1], cmd.channelMHz) && cmd.channelMHz > 0);
+    cmd.kind = valid ? Command::Tx : Command::TxInvalid;
+  }
+  else if (!strcmp(name, "RX") && (n == 1 || (n == 2 && number(words[1], cmd.channelMHz) && cmd.channelMHz > 0))) cmd.kind = Command::Rx;
   else if (n == 2 && !strcmp(words[1], "SSTV")) {
     if (!strcmp(name, "START")) cmd.kind = Command::StartImage;
     if (!strcmp(name, "STOP")) cmd.kind = Command::StopImage;
