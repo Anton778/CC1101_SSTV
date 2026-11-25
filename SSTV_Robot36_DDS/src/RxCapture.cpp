@@ -22,6 +22,7 @@ uint32_t dataMask = 0;
 unsigned bitCount = 0;
 uint8_t packedByte = 0;
 volatile unsigned blocksRemaining = 0;
+volatile bool continuous = false;
 volatile bool overrun = false;
 bool recording = false;
 unsigned blockCount = 0;
@@ -29,7 +30,7 @@ unsigned sent = 0;
 uint32_t checksum = 0;
 
 void IRAM_ATTR samplePin() {
-  if (!blocksRemaining || overrun) return;
+  if ((!continuous && !blocksRemaining) || overrun) return;
   packedByte = (packedByte << 1) | ((REG_READ(GPIO_IN_REG) & dataMask) != 0);
   ++bitCount;
   if ((bitCount & 7) != 0) return;
@@ -37,18 +38,40 @@ void IRAM_ATTR samplePin() {
   if (bitCount == 8 * BLOCK_BYTES) {
     // Копирование и пробуждение потребителя нужны только 20 раз в секунду.
     if (xQueueSendFromISR(blocks, &assembling, nullptr) != pdTRUE) overrun = true;
-    --blocksRemaining;
+    if (!continuous) --blocksRemaining;
     bitCount = 0;
   }
+}
+
+void sendBlock(const Block& block) {
+  char line[2 * BLOCK_BYTES + 48];
+  size_t pos = snprintf(line, sizeof(line), "SSTV DATA %u ", sent);
+  for (uint8_t value : block.data) {
+    line[pos++] = HEX_DIGITS[value >> 4];
+    line[pos++] = HEX_DIGITS[value & 15];
+    checksum = (checksum ^ value) * 16777619UL;
+  }
+  if (continuous) pos += snprintf(line + pos, sizeof(line) - pos, " %08lx", static_cast<unsigned long>(checksum));
+  line[pos++] = '\n';
+  Serial.write(reinterpret_cast<const uint8_t*>(line), pos);
+  ++sent;
 }
 
 }  // namespace
 
 bool rxRecording() { return recording; }
 
-void stopRxRecording() {
-  if (recording) timerStop(sampleTimer);
+void stopRxRecording(bool finishLive) {
+  if (!recording) return;
+  timerStop(sampleTimer);
   recording = false;
+  if (continuous && finishLive) {
+    Block block;
+    while (xQueueReceive(blocks, &block, 0) == pdTRUE) sendBlock(block);
+    if (overrun) Serial.println("SSTV ERROR OVERRUN");
+    else Serial.printf("SSTV END %u %08lx\n", sent, static_cast<unsigned long>(checksum));
+  }
+  continuous = false;
 }
 
 void startRxRecording(unsigned seconds, uint8_t dataPin) {
@@ -74,7 +97,9 @@ void startRxRecording(unsigned seconds, uint8_t dataPin) {
   checksum = 2166136261UL;  // FNV-1a для проверки всего файла при передаче через порт.
   blockCount = seconds * BLOCKS_PER_SECOND;
   blocksRemaining = blockCount;
-  Serial.printf("SSTV BEGIN %u %u %u\n", SAMPLE_RATE, BLOCK_BYTES, blockCount);
+  continuous = seconds == 0;
+  if (continuous) Serial.printf("SSTV LIVE %u %u\n", SAMPLE_RATE, BLOCK_BYTES);
+  else Serial.printf("SSTV BEGIN %u %u %u\n", SAMPLE_RATE, BLOCK_BYTES, blockCount);
   recording = true;
   timerRestart(sampleTimer);
   timerStart(sampleTimer);
@@ -83,23 +108,18 @@ void startRxRecording(unsigned seconds, uint8_t dataPin) {
 bool serviceRxCapture() {
   if (!recording) return false;
   if (overrun) {
-    stopRxRecording();
-    Serial.println("SSTV ERROR OVERRUN");
+    if (continuous) stopRxRecording(true);  // Выдать целые блоки, накопленные перед переполнением.
+    else {
+      stopRxRecording();
+      Serial.println("SSTV ERROR OVERRUN");
+    }
     return false;
   }
   Block block;
   if (xQueueReceive(blocks, &block, 0) != pdTRUE) return true;
 
-  char line[2 * BLOCK_BYTES + 32];
-  size_t pos = snprintf(line, sizeof(line), "SSTV DATA %u ", sent);
-  for (uint8_t value : block.data) {
-    line[pos++] = HEX_DIGITS[value >> 4];
-    line[pos++] = HEX_DIGITS[value & 15];
-    checksum = (checksum ^ value) * 16777619UL;
-  }
-  line[pos++] = '\n';
-  Serial.write(reinterpret_cast<const uint8_t*>(line), pos);
-  if (++sent == blockCount) {
+  sendBlock(block);
+  if (!continuous && sent == blockCount) {
     stopRxRecording();
     Serial.printf("SSTV END %u %08lx\n", sent, static_cast<unsigned long>(checksum));
   }

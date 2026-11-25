@@ -8,7 +8,6 @@
   <script defer src="wav.js"></script>
   <script defer src="robot36.js"></script>
   <script defer src="serial.js"></script>
-  <script defer src="sweep.js"></script>
   <script defer src="reference.js"></script>
   <script defer src="app.js"></script>
 </head>
@@ -16,62 +15,39 @@
   <main>
     <p><a href="../station/index.html">Научная рота · Общий пульт радиосвязи</a></p>
     <h1>Приём SSTV <span>Robot 36</span></h1>
-    <p class="intro">Запишите сигнал с приёмной ESP32. После записи браузер восстановит кадр 320 × 240 пикселей. WAV и PNG можно сохранить отдельно.</p>
+    <p class="intro">Подключите ESP32 по USB и закройте монитор порта Arduino IDE. Браузер переведёт плату в RX и покажет изображение по мере приёма.</p>
     <p><a href="../sender/index.html">Открыть отправитель изображений по USB</a></p>
     <div class="panels">
       <section>
-        <h2>Запись с платы</h2>
-        <p>Подключите приёмную ESP32 по USB и закройте монитор порта Arduino IDE. При записи конвертер переведёт выбранную плату в RX.</p>
+        <h2>Приём с платы</h2>
         <label for="rx-channel">Канал приёма, МГц</label>
         <input id="rx-channel" type="number" min="300" max="928" step="any" placeholder="Текущий">
-        <label for="seconds">Длительность, с</label>
-        <input id="seconds" type="number" value="90" min="40" max="120" step="1" required>
         <div class="actions">
-          <button id="record">Выбрать порт и записать</button>
-          <button id="cancel" class="secondary" hidden>Остановить</button>
+          <button id="record" type="button">Начать приём</button>
+          <button id="cancel" type="button" class="secondary" hidden>Остановить приём</button>
         </div>
-        <progress id="record-progress" max="90" value="0" hidden></progress>
-        <p class="status" role="status" id="record-status"></p>
-        <a id="save-recording" hidden download="robot36-rx.wav">Сохранить принятый WAV</a>
+        <label class="monitor"><input id="monitor" type="checkbox"> Слушать звук</label>
+        <p class="status" role="status" id="record-status">Включите приём до начала передачи картинки.</p>
+        <button id="save-recording" type="button" class="secondary" disabled>Сохранить WAV</button>
+        <ul id="recordings" aria-label="Завершённые записи"></ul>
+        <details>
+          <summary>Открыть WAV с компьютера</summary>
+          <label for="wav-file">Звуковая запись</label>
+          <input id="wav-file" type="file" accept=".wav,audio/wav,audio/x-wav">
+          <p class="file-info" id="file-info"></p>
+          <button id="example" type="button" class="secondary">Скачать контрольный WAV</button>
+        </details>
       </section>
       <section>
-        <h2>Изображение из WAV</h2>
-        <label for="wav-file">Звуковая запись</label>
-        <input id="wav-file" type="file" accept=".wav,audio/wav,audio/x-wav">
-        <p class="file-info" id="file-info">Для проверки без платы можно скачать контрольный WAV с цветными полосами.</p>
-        <div class="actions">
-          <button id="decode" disabled>Декодировать кадр</button>
-          <button id="example" class="secondary">Скачать контрольный WAV</button>
-        </div>
-        <p class="status" role="status" id="decode-status"></p>
+        <h2>Изображение Robot 36</h2>
+        <p class="status" role="status" id="decode-status">После заголовка VIS изображение появится здесь.</p>
         <figure id="result" hidden>
-          <canvas id="picture" width="320" height="240" aria-label="Принятое изображение Robot 36"></canvas>
+          <canvas id="picture" width="320" height="240" aria-label="Принимаемый кадр Robot 36"></canvas>
           <figcaption id="caption"></figcaption>
         </figure>
-        <a id="save-picture" hidden>Сохранить PNG</a>
+        <a id="save-picture" hidden>Сохранить последний полный кадр (PNG)</a>
       </section>
     </div>
-    <section class="experiment">
-      <h2>Постановка помехи</h2>
-      <p><a href="../station/index.html#sweep">Открыть модель диапазона в МГц</a></p>
-      <p>К выбранному WAV прибавляется тон. За один период его частота проходит от нижней границы до верхней и обратно. Откройте полученную копию и сравните изображения.</p>
-      <div class="fields">
-        <label>Нижняя частота, Гц<input id="low" type="number" min="20" step="1" value="1100" required></label>
-        <label>Верхняя частота, Гц<input id="high" type="number" min="21" step="1" value="2300" required></label>
-        <label>Период, с<input id="period" type="number" min="0.05" max="60" step="any" value="2" required></label>
-        <label>Амплитуда, % от пика WAV<input id="level" type="number" min="0" max="200" step="any" value="60" required></label>
-      </div>
-      <button id="sweep" disabled>Сохранить WAV со свипом</button>
-      <details>
-        <summary>Ввести параметры свипа командой</summary>
-        <form id="wav-command-form">
-          <label for="wav-command">Звуковые частоты в Гц, относительная мощность в дБ и период в с</label>
-          <input id="wav-command" type="text" value="WAV_SWEEP 1100 2300 -6 2" required spellcheck="false">
-          <button id="run-wav-command" type="submit" disabled>Применить к выбранному WAV</button>
-        </form>
-      </details>
-      <p class="status" role="status" id="sweep-status"></p>
-    </section>
   </main>
 </body>
 </html>

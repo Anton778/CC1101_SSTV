@@ -36,3 +36,7 @@ details { margin-top: .9rem; }
 summary { cursor: pointer; color: #174c4a; }
 #wav-command-form { margin-top: .55rem; }
 #wav-command { width: 23rem; margin-bottom: .55rem; font-family: ui-monospace, monospace; }
+.monitor { display: flex; align-items: center; gap: .45rem; margin: .75rem 0; }
+.monitor input { margin: 0; }
+#recordings:empty { display: none; }
+#recordings { overflow-wrap: anywhere; }

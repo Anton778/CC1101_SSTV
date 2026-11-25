@@ -62,6 +62,19 @@ void parse(char* line, const ScanRange& defaults, StationCommand& cmd) {
   const char* name = words[0];
   if (n == 1 && (!strcmp(name, "HELP") || !strcmp(name, "?"))) cmd.kind = Command::Help;
   else if (n == 1 && !strcmp(name, "INFO")) cmd.kind = Command::Info;
+  else if (!strcmp(name, "TUNING")) {
+    cmd.kind = Command::TuningInvalid;
+    if (n == 1) cmd.kind = Command::TuningGet;
+    else if (n == 2 && !strcmp(words[1], "DEFAULT")) cmd.kind = Command::TuningDefault;
+    else if (n == 3) {
+      int power;
+      double offsetKHz;
+      if (integer(words[1], power) && number(words[2], offsetKHz) && std::abs(offsetKHz) <= 200.0) {
+        cmd.tuning = {power, static_cast<int32_t>(std::lround(offsetKHz * 1000.0))};
+        if (cmd.tuning.valid()) cmd.kind = Command::TuningSet;
+      }
+    }
+  }
   else if (!strcmp(name, "CHAT") && (n == 1 || (n == 2 && number(words[1], cmd.rxMHz) && cmd.rxMHz > 0))) cmd.kind = Command::Chat;
   else if (n == 1 && !strcmp(name, "STATUS")) cmd.kind = Command::Status;
   else if (n == 1 && !strcmp(name, "TX")) cmd.kind = Command::Tx;
@@ -82,6 +95,7 @@ void parse(char* line, const ScanRange& defaults, StationCommand& cmd) {
   } else if (n == 1 && !strcmp(name, "PING")) cmd.kind = Command::Ping;
   else if (n == 1 && !strcmp(name, "STOP")) cmd.kind = Command::StopRecording;
   else if (!strcmp(name, "REC")) {
+    if (n == 2 && !strcmp(words[1], "LIVE")) { cmd.kind = Command::RecordLive; return; }
     int seconds;
     cmd.kind = Command::Record;
     if (n == 2 && integer(words[1], seconds) && seconds >= 40 && seconds <= 120)

@@ -24,7 +24,8 @@ window.fieldStation = (() => {
   let first = 433720,
     last = 434120,
     threshold = -75;
-  const buckets = new Float32Array(640).fill(NaN);
+  const plot = new SpectrumPlot(el("spectrum"), el("scan-cursor"));
+  let supportsTuning = false, tuningFailure = "";
 
   function show(id, message, error = false) {
     const node = el(id);
@@ -64,6 +65,9 @@ window.fieldStation = (() => {
       bytes > 192 ||
       !inChat("callsign").value.trim() ||
       !inChat("message").value.trim();
+    const tune = canAct && info?.ready && supportsTuning && mode !== "SCAN";
+    for (const id of ["tx-power", "freq-offset", "apply-tuning", "reset-tuning"]) el(id).disabled = !tune;
+    window.fieldStation?.onReceiveState?.();
     if (!port) inChat("chat-state").textContent = "Плата отключена.";
   }
 
@@ -99,7 +103,7 @@ window.fieldStation = (() => {
       await work();
     } catch (error) {
       if (output === "chat-state") inChat("chat-state").textContent = error.message;
-      else show(output, error.message, true);
+      else if (output !== "tuning-status" || !tuningFailure) show(output, error.message, true);
     } finally {
       if (port === session) {
         busy = false;
@@ -114,7 +118,27 @@ window.fieldStation = (() => {
   }
   function handle(line) {
     if (!line) return;
-    let m = /^FIELD MODE (TX|RX|SCAN|CHAT) ([\d.]+)$/.exec(line);
+    let m = /^FIELD TUNING (ACTIVE|PENDING|VOLATILE) (-?\d+) (-?[\d.]+)$/.exec(line);
+    if (m) {
+      supportsTuning = true;
+      el("tx-power").value = m[2];
+      el("freq-offset").value = m[3];
+      const value = m[2] + " дБм · " + m[3] + " кГц.";
+      const states = {ACTIVE: "Установлено", PENDING: "Ожидает окончания операции",
+                      VOLATILE: "Применено до перезапуска. Ошибка записи в память"};
+      show("tuning-status", tuningFailure + states[m[1]] + " · " + value, Boolean(tuningFailure) || m[1] === "VOLATILE");
+      render();
+      return;
+    }
+    if (line.startsWith("FIELD ERROR TUNING_")) {
+      const reasons = {TUNING_RANGE: "Проверьте мощность и границы частотного диапазона.",
+                       TUNING_BUSY: "Остановите приём или поиск перед подстройкой.",
+                       TUNING_RADIO: "CC1101 отклонил настройку."};
+      tuningFailure = (reasons[line.slice(12)] || "Плата отклонила настройку.") + " ";
+      show("tuning-status", tuningFailure.trim(), true);
+      return;
+    }
+    m = /^FIELD MODE (TX|RX|SCAN|CHAT) ([\d.]+)$/.exec(line);
     if (m) {
       mode = m[1];
       activeMHz = Number(m[2]);
@@ -153,8 +177,7 @@ window.fieldStation = (() => {
         r = Number(m[2]);
       if (f < first || f > last || !Number.isFinite(r)) return;
       ++count;
-      const k = Math.round(((f - first) * (buckets.length - 1)) / Math.max(1, last - first));
-      if (!Number.isFinite(buckets[k]) || r > buckets[k]) buckets[k] = r;
+      plot.add(f, r);
       if (m[3] === "1") {
         ++above;
         top.push({ f, r });
@@ -202,57 +225,7 @@ window.fieldStation = (() => {
     }
   }
   function drawScan() {
-    const canvas = el("spectrum"),
-      ctx = canvas.getContext("2d");
-    const x0 = 46,
-      x1 = canvas.width - 28,
-      y0 = 13,
-      y1 = canvas.height - 35;
-    const lo = Math.min(-120, Math.floor(threshold / 10) * 10 - 10),
-      hi = Math.max(-20, Math.ceil(threshold / 10) * 10 + 10);
-    const y = (r) => y1 - ((Math.max(lo, Math.min(hi, r)) - lo) * (y1 - y0)) / (hi - lo);
-    ctx.fillStyle = "#17231f";
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    ctx.font = "14px monospace";
-    ctx.lineWidth = 1;
-    for (let i = 0; i <= 5; i++) {
-      const r = lo + ((hi - lo) * i) / 5;
-      ctx.strokeStyle = "#435449";
-      ctx.beginPath();
-      ctx.moveTo(x0, y(r));
-      ctx.lineTo(x1, y(r));
-      ctx.stroke();
-      ctx.fillStyle = "#bfcbb9";
-      ctx.fillText(String(Math.round(r)), 3, y(r) + 4);
-    }
-    ctx.fillText((first / 1000).toFixed(3), x0, y1 + 24);
-    ctx.textAlign = "right";
-    ctx.fillText((last / 1000).toFixed(3) + " МГц", x1, y1 + 24);
-    ctx.textAlign = "left";
-    ctx.setLineDash([6, 5]);
-    ctx.strokeStyle = "#efd177";
-    ctx.beginPath();
-    ctx.moveTo(x0, y(threshold));
-    ctx.lineTo(x1, y(threshold));
-    ctx.stroke();
-    ctx.setLineDash([]);
-    ctx.beginPath();
-    ctx.strokeStyle = "#a6d29c";
-    ctx.lineWidth = 2;
-    let started = false;
-    for (let i = 0; i < buckets.length; i++)
-      if (Number.isFinite(buckets[i])) {
-        const x = x0 + (i * (x1 - x0)) / (buckets.length - 1),
-          yy = y(buckets[i]);
-        if (started) ctx.lineTo(x, yy);
-        else {
-          ctx.moveTo(x, yy);
-          started = true;
-        }
-        ctx.fillStyle = "#c6e3a7";
-        ctx.fillRect(x - 2, yy - 2, 4, 4);
-      }
-    ctx.stroke();
+    plot.draw();
     if (measuring) show("scan-status", "Измерено точек: " + count + ". Выше порога: " + above + ".");
     el("hits").replaceChildren(
       ...top.map((p) => {
@@ -264,6 +237,15 @@ window.fieldStation = (() => {
     );
   }
 
+  function tune(command) {
+    tuningFailure = "";
+    return action(() => request(command, line => /^FIELD TUNING (ACTIVE|PENDING|VOLATILE) /.test(line)), "tuning-status");
+  }
+  el("tuning-form").onsubmit = event => {
+    event.preventDefault();
+    tune("TUNING " + el("tx-power").value + " " + el("freq-offset").valueAsNumber.toFixed(3));
+  };
+  el("reset-tuning").onclick = () => tune("TUNING DEFAULT");
   el("tx").onclick = () =>
     action(async () => {
       await setMode("TX");
@@ -294,7 +276,7 @@ window.fieldStation = (() => {
       threshold = el("threshold").valueAsNumber;
       top = [];
       count = above = 0;
-      buckets.fill(NaN);
+      plot.reset(first, last, threshold);
       drawScan();
       measuring = true;
       try {
@@ -389,6 +371,7 @@ window.fieldStation = (() => {
   window.addEventListener("pagehide", () => popup?.close());
   const api = {
     onAvailable: null,
+    onReceiveState: null,
     session: () => (info ? port : null),
     canRecord: () => Boolean(info?.ready && !busy && !recording),
     canSend: () => Boolean(info?.ready && mode === "TX" && !busy && !recording && !paused),
@@ -432,6 +415,7 @@ window.fieldStation = (() => {
       el("rx-channel").value = m[4];
       inChat("chat-channel").value = m[5];
       paused = m[7] === "0";
+      if (!supportsTuning) show("tuning-status", "Настройки доступны с обновлённой прошивкой SSTV_Robot36_DDS.");
       if (!info.ready)
         show(
           "operation",
@@ -447,6 +431,11 @@ window.fieldStation = (() => {
       if (port !== session) return;
       unsubscribe?.();
       port = null;
+      supportsTuning = false;
+      tuningFailure = "";
+      el("tx-power").value = "";
+      el("freq-offset").value = "";
+      show("tuning-status", "Подключите плату, чтобы прочитать настройки.");
       info = null;
       mode = "";
       activeMHz = 0;
@@ -471,6 +460,5 @@ window.fieldStation = (() => {
   };
   render();
   drawScan();
-  if (location.hash === "#sweep") tab("sweep");
   return api;
 })();

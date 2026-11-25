@@ -6,10 +6,10 @@ const path = require("node:path");
 const vm = require("node:vm");
 
 const directory = path.join(__dirname, "..", "tools", "receiver");
-const scripts = ["wav.js", "robot36.js", "reference.js", "sweep.js"];
+const scripts = ["wav.js", "robot36.js", "reference.js"];
 const code = scripts.map(name => fs.readFileSync(path.join(directory, name), "utf8")).join("\n");
-const {Wav, Robot36, referenceRobot36, addAudioSweep, sweepFromCommand} = vm.runInNewContext(
-  code + "\n;({Wav, Robot36, referenceRobot36, addAudioSweep, sweepFromCommand})", {setTimeout}
+const {Wav, Robot36, referenceRobot36} = vm.runInNewContext(
+  code + "\n;({Wav, Robot36, referenceRobot36})", {setTimeout}
 );
 
 test("WAV → VIS 8 → 240 строк, порядок цветов в обеих половинах", async () => {
@@ -43,36 +43,25 @@ test("USB-биты идут старшим вперёд и переживают 
   assert.deepEqual(Array.from(audio.samples, value => Math.sign(value)), [1,-1,1,-1,-1,-1,-1,1]);
 });
 
-test("частота звукового свипа поднимается и опускается; исходный WAV сохранён", () => {
-  const rate = 16000;
-  const original = {rate, samples: new Float32Array(2 * rate).fill(0.5)};
-  const mixed = addAudioSweep(original, 1000, 2000, 1, 100);
-  function frequencyAt(time) {
-    let crossings = 0;
-    const first = Math.round((time - 0.02) * rate), count = Math.round(0.04 * rate);
-    for (let i = first; i < first + count; ++i) {
-      if (mixed.samples[i] <= 0.5 && mixed.samples[i + 1] > 0.5) ++crossings;
-    }
-    return crossings / 0.04;
+test("пары строк приходят до окончания кадра, следующий VIS восстанавливает синхронизацию", () => {
+  const {rate, samples} = referenceRobot36();
+  const finished = [], lost = [], rows = [];
+  const decoder = Robot36.stream(rate, {
+    onRows(frame, first) { assert.equal(frame.rows, first + 2); rows.push(frame.rows); },
+    onFrame(frame) { finished.push(frame); },
+    onLost(frame) { lost.push(frame.rows); }
+  });
+  function feed(data) {
+    for (let i = 0; i < data.length; i += 997) decoder.push(data.subarray(i, i + 997));
   }
-  for (const [time, hz] of [[0.10,1200], [0.45,1900], [0.75,1500], [1.10,1200]]) {
-    assert.ok(Math.abs(frequencyAt(time) - hz) <= 35);
-  }
-  assert.ok(original.samples.every(v => v === 0.5));
-  const clean = referenceRobot36();
-  assert.deepEqual(addAudioSweep(clean, 1100, 2300, 2, 0).samples, clean.samples);
-});
-
-test("команда свипа задаёт отношение мощностей в дБ и сохраняет исходные отсчёты", () => {
-  const audio = {rate: 16000, samples: new Float32Array(32000).fill(0.2)};
-  const mix = sweepFromCommand(audio, "wav_sweep 1100 2300 -6");
-  let tonePower = 0, signalPower = 0;
-  for (let i = 0; i < audio.samples.length; ++i) {
-    tonePower += (mix.samples[i] - audio.samples[i]) ** 2;
-    signalPower += audio.samples[i] ** 2;
-  }
-  assert.ok(Math.abs(10 * Math.log10(tonePower / signalPower) + 6) < 0.02);
-  assert.ok(audio.samples.every(v => v === Math.fround(0.2)));
-  assert.throws(() => sweepFromCommand(audio, "WAV_SWEEP 1100 2300"), /Формат/);
-  assert.throws(() => sweepFromCommand(audio, "WAV_SWEEP 2300 1100 -6"), /частоты/);
+  feed(samples.subarray(0, 2 * rate));
+  assert.ok(rows.length >= 1 && rows.at(-1) < 10);
+  assert.equal(finished.length, 0);
+  feed(samples);
+  feed(samples);
+  decoder.finish();
+  assert.equal(finished.length, 2);
+  assert.ok(lost.some(n => n > 0 && n < 240));
+  assert.deepEqual(finished.map(f => f.locked), [240, 240]);
+  assert.deepEqual(Array.from(finished[0].pixels), Array.from(finished[1].pixels));
 });

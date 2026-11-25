@@ -9,12 +9,11 @@
     <script defer src="../receiver/wav.js"></script>
     <script defer src="../receiver/robot36.js"></script>
     <script defer src="../receiver/serial.js"></script>
-    <script defer src="../receiver/sweep.js"></script>
     <script defer src="../receiver/reference.js"></script>
     <script defer src="../sender/transfer.js"></script>
     <script defer src="../sender/image.js"></script>
+    <script defer src="spectrum.js"></script>
     <script defer src="console.js"></script>
-    <script defer src="range-model.js"></script>
     <script defer src="../sender/app.js"></script>
     <script defer src="../receiver/app.js"></script>
   </head>
@@ -49,6 +48,21 @@
             ><button data-radio id="stop-tx" disabled>Стоп SSTV</button>
           </div>
         </div>
+        <form id="tuning-form" class="tuning">
+          <label>Выходная мощность, дБм
+            <select id="tx-power" disabled required>
+              <option value="" disabled selected>—</option>
+              <option>-30</option><option>-20</option><option>-15</option><option>-10</option>
+              <option>0</option><option>5</option><option>7</option><option>10</option>
+            </select>
+          </label>
+          <label>Поправка частоты, кГц
+            <input id="freq-offset" type="number" min="-200" max="200" step="0.001" placeholder="—" disabled required>
+          </label>
+          <button id="apply-tuning" type="submit" disabled>Применить</button>
+          <button id="reset-tuning" type="button" class="secondary" disabled>Из скетча</button>
+        </form>
+        <p id="tuning-status" class="note" role="status">Подключите плату, чтобы прочитать настройки.</p>
         <p id="operation" role="status" hidden></p>
       </section>
       <nav aria-label="Разделы пульта">
@@ -56,7 +70,6 @@
         ><button data-view="receive" aria-pressed="false">Приём SSTV</button>
         <button data-view="scan" aria-pressed="false">Поиск сигнала</button
         ><button data-view="chat" aria-pressed="false">Радиочат</button>
-        <button data-view="sweep" aria-pressed="false">Постановка помехи</button>
       </nav>
       <div id="view-pictures" class="view">
         <div class="workspace">
@@ -97,41 +110,33 @@
       <div id="view-receive" class="view" hidden>
         <div class="panels">
           <section>
-            <h2>Запись с платы</h2>
-            <p>
-              Подготовьте приём до начала заголовка VIS. После записи пульт автоматически восстановит первый
-              полный кадр.
-            </p>
+            <h2>Приём с платы</h2>
             <label for="rx-channel">Канал приёма, МГц</label>
-            <input id="rx-channel" type="number" min="300" max="928" step="any" placeholder="Текущий" />
-            <label for="seconds">Длительность, с</label>
-            <input id="seconds" type="number" value="90" min="40" max="120" step="1" required />
+            <input id="rx-channel" type="number" min="300" max="928" step="any" placeholder="Текущий">
             <div class="actions">
-              <button id="record" disabled>Принять и декодировать</button>
-              <button id="cancel" class="secondary" hidden>Остановить</button>
+              <button id="record" type="button">Начать приём</button>
+              <button id="cancel" type="button" class="secondary" hidden>Остановить приём</button>
             </div>
-            <progress id="record-progress" max="90" value="0" hidden></progress>
-            <p class="status" role="status" id="record-status"></p>
-            <a id="save-recording" hidden download="robot36-rx.wav">Сохранить принятый WAV</a>
+            <label class="monitor"><input id="monitor" type="checkbox"> Слушать звук</label>
+            <p class="status" role="status" id="record-status">Включите приём до начала передачи картинки.</p>
+            <button id="save-recording" type="button" class="secondary" disabled>Сохранить WAV</button>
+            <ul id="recordings" aria-label="Завершённые записи"></ul>
+            <details>
+              <summary>Открыть WAV с компьютера</summary>
+              <label for="wav-file">Звуковая запись</label>
+              <input id="wav-file" type="file" accept=".wav,audio/wav,audio/x-wav">
+              <p class="file-info" id="file-info"></p>
+              <button id="example" type="button" class="secondary">Скачать контрольный WAV</button>
+            </details>
           </section>
           <section>
-            <h2>Декодирование Robot 36</h2>
-            <label for="wav-file">Звуковая запись</label>
-            <input id="wav-file" type="file" accept=".wav,audio/wav,audio/x-wav" />
-            <p class="file-info" id="file-info">
-              Для проверки без платы можно скачать контрольный WAV с цветными полосами.
-            </p>
-            <div class="actions">
-              <button id="decode" disabled>Декодировать кадр</button>
-              <button id="load-bars" type="button" class="secondary">Проверить на цветовых полосах</button>
-              <button id="example" class="secondary">Скачать контрольный WAV</button>
-            </div>
-            <p class="status" role="status" id="decode-status"></p>
+            <h2>Изображение Robot 36</h2>
+            <p class="status" role="status" id="decode-status">После заголовка VIS изображение появится здесь.</p>
             <figure id="result" hidden>
-              <canvas id="picture" width="320" height="240" aria-label="Принятое изображение Robot 36"></canvas>
+              <canvas id="picture" width="320" height="240" aria-label="Принимаемый кадр Robot 36"></canvas>
               <figcaption id="caption"></figcaption>
             </figure>
-            <a id="save-picture" hidden>Сохранить PNG</a>
+            <a id="save-picture" hidden>Сохранить последний полный кадр (PNG)</a>
           </section>
         </div>
       </div>
@@ -172,11 +177,12 @@
           <section class="card">
             <h2>Уровень по частоте</h2>
             <canvas
-              id="spectrum"
+              id="spectrum" tabindex="0" aria-describedby="scan-cursor"
               width="740"
               height="240"
               aria-label="График уровня сигнала в дБм по частоте в МГц"
             ></canvas>
+            <p id="scan-cursor" class="note">Наведите курсор, коснитесь графика или выберите точку стрелками ← →.</p>
             <table>
               <caption>
                 Самые сильные точки выше порога
@@ -234,75 +240,6 @@
         <p id="chat-away" hidden>
           Чат открыт в отдельном окне. <button id="focus-chat" class="text">Перейти в окно чата</button>
         </p>
-      </div>
-      <div id="view-sweep" class="view" hidden>
-        <section class="experiment card" aria-labelledby="range-title">
-          <h2 id="range-title">Свип по диапазону</h2>
-          <p>График показывает ход частоты от начальной до конечной и обратно. Браузер рассчитывает его локально, без передачи в эфир.</p>
-          <form id="range-form">
-            <div class="fields">
-              <label>Начальная частота, МГц<input id="range-from" type="number" min="0.000001" step="any" value="433.850" required /></label>
-              <label>Конечная частота, МГц<input id="range-to" type="number" min="0.000001" step="any" value="433.950" required /></label>
-              <label>Полный период, с<input id="range-period" type="number" min="0.1" max="120" step="any" value="4" required /></label>
-            </div>
-            <div class="actions">
-              <button id="range-run" type="submit">Запустить модель</button>
-              <button id="range-stop" type="button" class="secondary" disabled>Остановить</button>
-            </div>
-          </form>
-          <canvas id="range-plot" width="720" height="195" aria-label="Частота модели в мегагерцах в течение одного периода"></canvas>
-          <p>Текущая частота модели <b id="range-frequency">—</b></p>
-          <p id="range-status" role="status"></p>
-        </section>
-        <section class="experiment card">
-          <h2>Модель звуковой помехи</h2>
-          <p>
-            Браузер прибавляет свип-тон к звуку после ЧМ-демодуляции. Используется последняя запись из раздела
-            «Приём SSTV» или контрольные цветовые полосы. Границы задаются по звуковой частоте.
-          </p>
-          <div class="fields">
-            <label
-              >Нижняя частота, Гц<input id="low" type="number" min="20" step="1" value="1100" required
-            /></label>
-            <label
-              >Верхняя частота, Гц<input id="high" type="number" min="21" step="1" value="2300" required
-            /></label>
-            <label
-              >Период, с<input id="period" type="number" min="0.05" max="60" step="any" value="2" required
-            /></label>
-            <label
-              >Амплитуда, % от пика WAV<input
-                id="level"
-                type="number"
-                min="0"
-                max="200"
-                step="any"
-                value="60"
-                required
-            /></label>
-          </div>
-          <button id="compare" type="button">Сравнить два кадра</button>
-          <button id="sweep" disabled>Сохранить WAV со свипом</button>
-          <details>
-            <summary>Ввести параметры свипа командой</summary>
-            <form id="wav-command-form">
-              <label for="wav-command">Звуковые частоты в Гц, относительная мощность в дБ и период в с</label>
-              <input id="wav-command" type="text" value="WAV_SWEEP 1100 2300 -6 2" required spellcheck="false" />
-              <button id="run-wav-command" type="submit" disabled>Применить к выбранному WAV</button>
-            </form>
-          </details>
-          <p class="status" role="status" id="sweep-status"></p>
-          <div id="comparison" class="frames" hidden>
-            <figure>
-              <figcaption>Исходный кадр</figcaption>
-              <canvas id="clean-frame" width="320" height="240"></canvas>
-            </figure>
-            <figure>
-              <figcaption>Кадр со свипом</figcaption>
-              <canvas id="mixed-frame" width="320" height="240"></canvas>
-            </figure>
-          </div>
-        </section>
       </div>
     </main>
   </body>

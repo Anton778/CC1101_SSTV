@@ -18,6 +18,8 @@ SstvMode mode = SSTV_RX;
 ScanRange defaultScan{}, scan{};
 double txMHz, rxMHz, chatMHz, offsetKHz;
 int8_t txPowerDbm;
+RadioTuning sketchTuning{}, requestedTuning{};
+bool tuningPending = false, restoreTuning = false, persisted = true;
 bool ready = false, repeatImages = true, repeatScan = false;
 uint32_t nextFrameMs = 0, nextScanMs = 0;
 bool awaitingFrame = false;
@@ -31,11 +33,13 @@ void interruptFrame(const char* why) {
   if (awaitingFrame) { awaitingFrame = false; imageError(why); }
 }
 
-uint32_t correctedHz(double nominalHz) {
-  const double hz = nominalHz + offsetKHz * 1000;
+uint32_t applyOffset(double nominalHz, double correctionKHz) {
+  const double hz = nominalHz + correctionKHz * 1000;
   if (!(hz >= 1 && hz <= UINT32_MAX)) return 0;
   return static_cast<uint32_t>(hz + 0.5);
 }
+
+uint32_t correctedHz(double nominalHz) { return applyOffset(nominalHz, offsetKHz); }
 
 // Интервалы синтезатора CC1101. Весь проход должен лежать в одном интервале.
 int band(uint32_t hz) {
@@ -77,11 +81,11 @@ bool radioOK(const char* operation, int16_t code) {
   return false;
 }
 void cancelRecording() {
-  stopRxRecording();
+  stopRxRecording(true);
   Serial.println("SSTV STOP");
 }
-bool selectMode(SstvMode requested, double channelMHz) {
-  if (ready && requested == mode && requested != SSTV_SCAN &&
+bool selectMode(SstvMode requested, double channelMHz, bool retune = false) {
+  if (!retune && ready && requested == mode && requested != SSTV_SCAN &&
       (mode != SSTV_RX || channelMHz == rxMHz) && (mode != SSTV_CHAT || channelMHz == chatMHz)) {
     Serial.printf("FIELD MODE %s %.6f\n", modeName(), channelMHz);
     return true;
@@ -92,7 +96,7 @@ bool selectMode(SstvMode requested, double channelMHz) {
   const bool interrupted = Robot36Tx::active();
   if (requested != SSTV_TX) interruptFrame("INTERRUPTED");
   releaseOutput();
-  if (!ready || ((mode == SSTV_CHAT) != (requested == SSTV_CHAT))) {
+  if (retune || !ready || ((mode == SSTV_CHAT) != (requested == SSTV_CHAT))) {
     ConfigFSK_t config;
     if (requested == SSTV_CHAT) {
       config.bitRate = 9600;
@@ -136,10 +140,51 @@ bool selectMode(SstvMode requested, double channelMHz) {
                 modeName(), channelMHz, offsetKHz, hz / 1e6);
   return true;
 }
+bool fitsChannels(const RadioTuning& tuning) {
+  const double offset = tuning.offsetHz / 1000.0;
+  return band(applyOffset(txMHz * 1e6, offset)) && band(applyOffset(rxMHz * 1e6, offset)) &&
+         band(applyOffset(chatMHz * 1e6, offset));
+}
+void printTuning() {
+  if (tuningPending) {
+    Serial.printf("FIELD TUNING PENDING %d %.3f\n", int(requestedTuning.powerDbm), requestedTuning.offsetHz / 1000.0);
+  } else {
+    Serial.printf("FIELD TUNING %s %d %.3f\n", persisted ? "ACTIVE" : "VOLATILE", int(txPowerDbm), offsetKHz);
+  }
+}
+void applyPendingTuning() {
+  if (!tuningPending || ImageStore::busy() || awaitingFrame || Robot36Tx::active() ||
+      rxRecording() || mode == SSTV_SCAN) return;
+  tuningPending = false;
+  if (!fitsChannels(requestedTuning)) { Serial.println("FIELD ERROR TUNING_RANGE"); printTuning(); return; }
+  const auto previousPower = txPowerDbm;
+  const auto previousOffset = offsetKHz;
+  const auto previousMode = mode;
+  const auto nextTx = nextFrameMs;
+  const double channel = mode == SSTV_TX ? txMHz : (mode == SSTV_CHAT ? chatMHz : rxMHz);
+  const double offset = requestedTuning.offsetHz / 1000.0;
+  if (!ready || txPowerDbm != requestedTuning.powerDbm || offsetKHz != offset) {
+    txPowerDbm = requestedTuning.powerDbm;
+    offsetKHz = offset;
+    if (!selectMode(previousMode, channel, true)) {
+      txPowerDbm = previousPower;
+      offsetKHz = previousOffset;
+      selectMode(previousMode, channel, true);
+      nextFrameMs = nextTx;
+      Serial.println("FIELD ERROR TUNING_RADIO");
+      printTuning();
+      return;
+    }
+    nextFrameMs = nextTx; // Не сокращаем штатную паузу между кадрами.
+  }
+  persisted = storeTuning(requestedTuning, restoreTuning);
+  printTuning();
+}
 void printHelp() {
   Serial.println("TX | RX [канал_МГц] | Start_SSTV | Stop SSTV | STATUS | HELP");
   Serial.println("В RX: SCAN или SCAN начало_кГц конец_кГц порог_дБм [шаг_кГц]");
-  Serial.println("CHAT [канал_МГц] | INFO");
+  Serial.println("CHAT [канал_МГц] | INFO | REC LIVE | STOP");
+  Serial.println("TUNING [мощность_дБм поправка_кГц] | TUNING DEFAULT");
   Serial.println("Пример: SCAN 433720 434120 -75 25");
 }
 void command(const StationCommand& cmd) {
@@ -150,7 +195,27 @@ void command(const StationCommand& cmd) {
       Serial.printf("FIELD INFO 1 %s %s %.6f %.6f %.6f %d %d %u %u\n", BoardProfile::NAME, modeName(),
                     txMHz, rxMHz, chatMHz, ready, repeatImages,
                     unsigned(ESP.getFlashChipSize() >> 20), unsigned(esp_psram_get_size() >> 20));
+      // Отдельная строка сохраняет совместимость INFO с прежним пультом.
+      printTuning();
       break;
+    case Command::TuningGet:
+      printTuning();
+      break;
+    case Command::TuningInvalid:
+      Serial.println("FIELD ERROR TUNING_RANGE");
+      break;
+    case Command::TuningSet:
+    case Command::TuningDefault: {
+      if (rxRecording() || mode == SSTV_SCAN) { Serial.println("FIELD ERROR TUNING_BUSY"); break; }
+      const bool reset = cmd.kind == Command::TuningDefault;
+      const RadioTuning candidate = reset ? sketchTuning : cmd.tuning;
+      if (!fitsChannels(candidate)) { Serial.println("FIELD ERROR TUNING_RANGE"); break; }
+      restoreTuning = reset;
+      requestedTuning = candidate;
+      tuningPending = true;
+      if (Robot36Tx::active() || ImageStore::busy() || awaitingFrame) printTuning();
+      break;
+    }
     case Command::Chat:
       if (rxRecording()) { Serial.println("FIELD ERROR BUSY"); break; }
       selectMode(SSTV_CHAT, cmd.rxMHz ? cmd.rxMHz : chatMHz);
@@ -247,10 +312,11 @@ void command(const StationCommand& cmd) {
       else if (mode != SSTV_RX) Serial.printf("SSTV MODE %s\n", modeName());
       else Serial.println((rxRecording() || ImageStore::busy()) ? "SSTV BUSY" : "SSTV READY 1");
       break;
+    case Command::RecordLive:
     case Command::Record:
       if (!ready || mode != SSTV_RX) Serial.println("SSTV ERROR RX");
       else if (rxRecording() || ImageStore::busy()) Serial.println("SSTV BUSY");
-      else if (!cmd.seconds) Serial.println("SSTV ERROR DURATION");
+      else if (cmd.kind != Command::RecordLive && !cmd.seconds) Serial.println("SSTV ERROR DURATION");
       else startRxRecording(cmd.seconds, PIN_GDO0);
       break;
     case Command::StopRecording:
@@ -279,6 +345,12 @@ void beginStation(SstvMode initial, double channelMHz, double correctionKHz, int
   chatMHz = defaultChatMHz;
   offsetKHz = correctionKHz;
   txPowerDbm = powerDbm;
+  sketchTuning = {powerDbm, static_cast<int32_t>(std::lround(correctionKHz * 1000.0))};
+  RadioTuning saved{};
+  if (readTuning(saved) && fitsChannels(saved)) {
+    txPowerDbm = saved.powerDbm;
+    offsetKHz = saved.offsetHz / 1000.0;
+  }
   defaultScan = scan = defaults;
   repeatScan = initial == SSTV_SCAN;
   if (repeatScan && !validRange(scan)) {
@@ -294,6 +366,7 @@ SstvMode pollStation() {
   if (ImageStore::expired(millis())) abortUpload("TIMEOUT");
   StationCommand cmd;
   if (readStationCommand(defaultScan, cmd)) command(cmd);
+  applyPendingTuning();
   return mode;
 }
 const ScanRange& scanSettings() { return scan; }

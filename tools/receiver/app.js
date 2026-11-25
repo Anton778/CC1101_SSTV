@@ -1,192 +1,196 @@
 "use strict";
 
 const byId = id => document.getElementById(id);
-const wavType = "audio/wav";
-let selectedAudio, baseName, captureController, processing = false;
+const canvas = byId("picture"), picture = canvas.getContext("2d");
+let captureController, processing = false, audioContext, playAt = 0;
+let part, pngVersion = 0;
 
-function status(id, text, error = false) {
+function status(id, message, error = false) {
   const node = byId(id);
-  node.textContent = text;
+  node.textContent = message;
   node.classList.toggle("error", error);
 }
-
-function setLink(id, blob, filename) {
-  const link = byId(id);
-  if (link.hasAttribute("href")) URL.revokeObjectURL(link.href);
-  link.href = URL.createObjectURL(blob);
-  link.download = filename;
-  link.hidden = false;
+function setControls() {
+  const locked = processing || Boolean(captureController);
+  byId("record").disabled = locked || !navigator.serial || Boolean(window.fieldStation && !window.fieldStation.canRecord());
+  byId("wav-file").disabled = byId("rx-channel").disabled = locked;
 }
-
-function downloadWav(audio, filename) {
+function download(blob, name) {
   const link = document.createElement("a");
-  const url = URL.createObjectURL(new Blob([Wav.write(audio)], {type: wavType}));
-  link.href = url;
-  link.download = filename;
+  link.download = name;
+  link.href = URL.createObjectURL(blob);
   document.body.append(link);
   link.click();
   link.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 60000);
+  setTimeout(() => URL.revokeObjectURL(link.href), 60000);
 }
-
-function fileControls() {
-  const locked = processing || Boolean(captureController);
-  byId("record").disabled = locked || !navigator.serial || Boolean(window.fieldStation && !window.fieldStation.canRecord());
-  if (byId("compare")) byId("compare").disabled = byId("load-bars").disabled = locked;
-  byId("wav-file").disabled = processing || Boolean(captureController);
-  byId("decode").disabled = processing || Boolean(captureController) || !selectedAudio;
-  byId("sweep").disabled = byId("run-wav-command").disabled = processing || Boolean(captureController) || !selectedAudio;
+function wavBlob(audio) {
+  return new Blob([Wav.write(audio)], {type: "audio/wav"});
 }
+function savePart(clip) {
+  if (!clip?.used) return;
+  const audio = Wav.unpack(clip.bytes.subarray(0, clip.used), 32000);
+  download(wavBlob(audio), clip.name + ".wav");
+}
+function archivePart() {
+  if (!part?.used) return;
+  const clip = part;
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "secondary";
+  button.textContent = clip.label + " · " + (clip.used / 4000).toFixed(2) + " с · WAV";
+  button.onclick = () => savePart(clip);
+  const item = document.createElement("li");
+  item.append(button);
+  byId("recordings").prepend(item);
+}
+byId("save-recording").onclick = () => savePart(part);
 
-if (!navigator.serial) {
-  byId("record").disabled = true;
-  status("record-status", "Для записи по USB откройте эту страницу в настольном Chrome или Edge. Открыть готовый WAV можно здесь.");
+function enableMonitor() {
+  if (!captureController || !byId("monitor").checked || audioContext) return;
+  try {
+    audioContext = new AudioContext();
+    audioContext.resume().catch(() => {});
+    playAt = 0;
+  } catch {
+    byId("monitor").checked = false;
+  }
+}
+function closeMonitor() {
+  if (audioContext) audioContext.close().catch(() => {});
+  audioContext = null;
+}
+byId("monitor").onchange = () => byId("monitor").checked ? enableMonitor() : closeMonitor();
+function playBlock({samples, rate}) {
+  if (audioContext?.state !== "running") return;
+  const now = audioContext.currentTime;
+  if (playAt < now || playAt > now + 0.3) playAt = now + 0.05;
+  const buffer = audioContext.createBuffer(1, samples.length, rate);
+  buffer.copyToChannel(samples, 0);
+  const source = audioContext.createBufferSource();
+  source.buffer = buffer;
+  source.connect(audioContext.destination);
+  source.start(playAt);
+  playAt += buffer.duration;
+}
+function saveComplete(frame, name) {
+  const version = ++pngVersion;
+  canvas.toBlob(blob => {
+    if (version !== pngVersion || !blob) return;
+    const link = byId("save-picture");
+    if (link.hasAttribute("href")) URL.revokeObjectURL(link.href);
+    link.href = URL.createObjectURL(blob);
+    link.download = name + ".png";
+    link.hidden = false;
+  }, "image/png");
+  byId("caption").textContent = "Принято 240 строк. Строчная синхронизация в " + frame.locked + " из 240.";
+}
+function livePicture(name) {
+  let number = 0;
+  return Robot36.stream(32000, {
+    onHeader() {
+      ++number;
+      picture.clearRect(0, 0, canvas.width, canvas.height);
+      byId("result").hidden = false;
+      byId("caption").textContent = "Ожидание первой пары строк.";
+      status("decode-status", "Принят заголовок Robot 36 (VIS = 8). Кадр " + number + ".");
+    },
+    onRows(frame, first) {
+      const stride = 4 * frame.width;
+      const pair = frame.pixels.subarray(first * stride, (first + 2) * stride);
+      picture.putImageData(new ImageData(pair, frame.width, 2), 0, first);
+      byId("caption").textContent = "Принято " + frame.rows + " из 240 строк.";
+    },
+    onFrame(frame) {
+      saveComplete(frame, name + "-кадр-" + number);
+      status("decode-status", "Кадр " + number + " принят. Ожидание следующего заголовка.");
+    },
+    onLost(frame) {
+      const message = frame.rows < 240 ? "Приём кадра прерван." : "Недостаточно строчных синхроимпульсов.";
+      status("decode-status", message + " Получено " + frame.rows + " из 240 строк.");
+    }
+  });
 }
 byId("record").onclick = async () => {
   const field = window.fieldStation;
-  if (processing || captureController || (field && !field.session())) return;
-  const seconds = byId("seconds").valueAsNumber;
-  if (!byId("seconds").reportValidity() || !byId("rx-channel").reportValidity()) return;
-  const rxMHz = byId("rx-channel").value === "" ? null : byId("rx-channel").valueAsNumber;
-  if (field && !field.beginCapture()) return;
+  if (processing || captureController || !byId("rx-channel").reportValidity() || (field && !field.beginCapture())) return;
+  const input = byId("rx-channel");
+  const rxMHz = input.value === "" ? null : input.valueAsNumber;
+  const started = new Date();
+  const name = "robot36-" + started.toISOString().replace(/[:.]/g, "-");
+  const decoder = livePicture(name);
+  let partNumber = 0;
   captureController = new AbortController();
-  byId("rx-channel").disabled = byId("seconds").disabled = byId("record").disabled = true;
+  setControls();
   byId("cancel").hidden = false;
-  const progress = byId("record-progress");
-  progress.max = seconds;
-  progress.value = 0;
-  fileControls();
-  status("record-status", "Подключение к приёмной ESP32…");
+  byId("cancel").disabled = false;
+  status("record-status", "Подключение к приёмной плате…");
+  enableMonitor();
   try {
     const source = field ? field.session() : await navigator.serial.requestPort();
     const capture = field ? captureOnSession : captureFromPort;
-    const audio = await capture(source, seconds, captureController.signal, elapsed => {
-      progress.hidden = false;
-      progress.value = elapsed;
-      status("record-status", "Идёт запись: " + elapsed + " из " + seconds + " с.");
-    }, rxMHz);
-    const stamp = new Date().toISOString().slice(0, 19).replace(/[T:]/g, "-");
-    setLink("save-recording", new Blob([Wav.write(audio)], {type: wavType}), "robot36-rx-" + stamp + ".wav");
-    byId("cancel").hidden = true;
-    status("record-status", "Принято " + seconds + " с. Декодирование началось.");
-    selectedAudio = audio;
-    baseName = "robot36-rx-" + stamp;
-    byId("file-info").textContent = "Запись с платы · " + audio.rate + " Гц · " + seconds + " с";
-    await decodeSelected();
+    const result = await capture(source, null, captureController.signal, seconds => {
+      status("record-status", "Идёт запись · " + seconds + " с");
+      if (seconds === 0) status("decode-status", "Ожидание заголовка Robot 36 (VIS = 8).");
+    }, rxMHz, (bytes, rate) => {
+      if (!partNumber || !part || part.used === part.bytes.length) {
+        archivePart();
+        // Двухминутные части можно снова открыть во встроенном WAV-декодере.
+        ++partNumber;
+        part = {bytes: new Uint8Array(120 * 4000), used: 0, name: name + "-часть-" + partNumber,
+                label: started.toLocaleTimeString("ru-RU") + " · часть " + partNumber};
+      }
+      part.bytes.set(bytes, part.used);
+      part.used += bytes.length;
+      byId("save-recording").disabled = false;
+      const audio = Wav.unpack(bytes, rate);
+      playBlock(audio);
+      decoder.push(audio.samples);
+    });
+    status("record-status", "Приём остановлен. Записано " + result.seconds.toFixed(2) + " с.");
   } catch (e) {
     let message = e.message;
     if (e.name === "NotFoundError") message = "Выбор порта отменён.";
-    if (e.name === "NetworkError") message = "Не удалось открыть или прочитать порт. Закройте монитор порта и проверьте USB-кабель.";
+    if (e.name === "NetworkError") message = "Пропала связь по USB. Проверьте кабель и монитор порта Arduino IDE.";
+    if (partNumber) message += " Принятый звук доступен по кнопке «Сохранить WAV».";
     status("record-status", message, true);
   } finally {
+    decoder.finish();
     captureController = null;
+    closeMonitor();
+    byId("cancel").hidden = true;
     field?.endCapture();
-    byId("rx-channel").disabled = byId("seconds").disabled = byId("record").disabled = false;
-    byId("cancel").hidden = progress.hidden = true;
-    fileControls();
+    setControls();
   }
 };
-byId("cancel").onclick = () => captureController?.abort();
+byId("cancel").onclick = () => {
+  byId("cancel").disabled = true;
+  captureController?.abort();
+};
 
 byId("wav-file").onchange = async event => {
   const file = event.target.files[0];
-  if (!file) return;
+  if (!file || processing || captureController) return;
   processing = true;
-  selectedAudio = null;
-  byId("result").hidden = byId("save-picture").hidden = true;
-  status("decode-status", "");
-  status("sweep-status", "");
-  fileControls();
+  setControls();
   try {
-    if (file.size > 140 * 1024 * 1024) throw Error("WAV превышает 140 МиБ. Оставьте фрагмент с одним полным кадром.");
-    selectedAudio = Wav.read(await file.arrayBuffer());
-    baseName = file.name.replace(/\.wav$/i, "");
-    byId("file-info").textContent = file.name + " · " + selectedAudio.rate + " Гц · " +
-      (selectedAudio.samples.length / selectedAudio.rate).toFixed(1) + " с";
-  } catch (e) {
-    byId("file-info").textContent = file.name;
-    status("decode-status", e.message, true);
-  } finally {
-    processing = false;
-    fileControls();
-  }
-};
-
-async function decodeSelected() {
-  processing = true;
-  fileControls();
-  byId("result").hidden = byId("save-picture").hidden = true;
-  try {
-    const frame = await Robot36.decode(selectedAudio, fraction => {
-      status("decode-status", "Обработка сигнала: " + Math.round(100 * fraction) + " %");
-    });
-    const canvas = byId("picture");
-    canvas.getContext("2d").putImageData(new ImageData(frame.pixels, frame.width, frame.height), 0, 0);
-    const png = await new Promise(resolve => canvas.toBlob(resolve, "image/png"));
-    if (!png) throw Error("Браузер не смог создать PNG.");
-    setLink("save-picture", png, baseName + ".png");
-    byId("caption").textContent = "Начало заголовка на " + frame.headerTime.toFixed(2) +
-      " с. Строк с синхронизацией: " + frame.locked + " из 240.";
+    if (file.size > 140 * 1024 * 1024) throw Error("WAV превышает 140 МиБ. Выберите фрагмент с полным кадром.");
+    const audio = Wav.read(await file.arrayBuffer());
+    byId("file-info").textContent = file.name + " · " + audio.rate + " Гц · " + (audio.samples.length / audio.rate).toFixed(2) + " с";
+    const frame = await Robot36.decode(audio, f => status("decode-status", "Декодирование WAV · " + Math.round(f * 100) + "%"));
+    picture.putImageData(new ImageData(frame.pixels, frame.width, frame.height), 0, 0);
     byId("result").hidden = false;
-    status("decode-status", "Принят кадр Robot 36, VIS = 8.");
+    saveComplete(frame, file.name.replace(/\.wav$/i, ""));
+    status("decode-status", "Кадр Robot 36 из WAV. Начало заголовка на " + frame.headerTime.toFixed(2) + " с.");
   } catch (e) {
     status("decode-status", e.message, true);
   } finally {
     processing = false;
-    fileControls();
-  }
-}
-
-byId("decode").onclick = decodeSelected;
-byId("example").onclick = () => downloadWav(referenceRobot36(), "robot36-bars.wav");
-function saveSweep(createAudio) {
-  if (!selectedAudio) return;
-  try {
-    const audio = createAudio();
-    downloadWav(audio, baseName + "-sweep.wav");
-    status("sweep-status", "Копия подготовлена. Выберите WAV со свипом в разделе декодирования.");
-  } catch (e) {
-    status("sweep-status", e.message, true);
-  }
-}
-byId("sweep").onclick = () => {
-  const fields = ["low", "high", "period", "level"].map(byId);
-  if (fields.every(field => field.reportValidity())) {
-    saveSweep(() => addAudioSweep(selectedAudio, ...fields.map(field => field.valueAsNumber)));
+    event.target.value = "";
+    setControls();
   }
 };
-byId("wav-command-form").onsubmit = event => {
-  event.preventDefault();
-  saveSweep(() => sweepFromCommand(selectedAudio, byId("wav-command").value));
-};
-
-// В общем пульте контрольная запись и опыт доступны без радиоплаты.
-if (byId("load-bars")) byId("load-bars").onclick = async () => {
-  if (processing || captureController) return;
-  selectedAudio = referenceRobot36();
-  baseName = "robot36-bars";
-  byId("file-info").textContent = "Контрольная запись · цветовые полосы";
-  await decodeSelected();
-};
-if (byId("compare")) byId("compare").onclick = async () => {
-  if (processing || captureController) return;
-  const fields = ["low", "high", "period", "level"].map(byId);
-  if (!fields.every(field => field.reportValidity())) return;
-  processing = true;
-  fileControls();
-  const output = byId("comparison");
-  output.hidden = true;
-  try {
-    const source = selectedAudio || referenceRobot36();
-    status("sweep-status", "Декодирование исходной записи…");
-    const clean = await Robot36.decode(source, () => {});
-    byId("clean-frame").getContext("2d").putImageData(new ImageData(clean.pixels, clean.width, clean.height), 0, 0);
-    output.hidden = false;
-    byId("mixed-frame").getContext("2d").clearRect(0, 0, 320, 240);
-    status("sweep-status", "Декодирование копии со свипом…");
-    const mixed = await Robot36.decode(addAudioSweep(source, ...fields.map(f => f.valueAsNumber)), () => {});
-    byId("mixed-frame").getContext("2d").putImageData(new ImageData(mixed.pixels, mixed.width, mixed.height), 0, 0);
-    status("sweep-status", "Строк с синхронизацией из 240. Исходный кадр — " + clean.locked + ", со свипом — " + mixed.locked + ".");
-  } catch (e) { status("sweep-status", e.message, true); }
-  finally { processing = false; fileControls(); }
-};
+byId("example").onclick = () => download(wavBlob(referenceRobot36()), "robot36-bars.wav");
+if (!navigator.serial) status("record-status", "Для приёма по USB откройте страницу в настольном Chrome или Edge.");
+if (window.fieldStation) window.fieldStation.onReceiveState = setControls;
+setControls();
